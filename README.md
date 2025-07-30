@@ -54,7 +54,7 @@ npm run dev
 - **Worker API**: http://localhost:8000
 - **Health Check**: http://localhost:8000/health
 
-## 🛠️ Available Tools
+## Available Tools
 
 ### Markov Chain Monte Carlo (`markov_mcs`)
 
@@ -178,7 +178,7 @@ TOOL_CALL:plot_line:{"series": {"State 0": [0], "State 1": [0]}, "title": "Stati
 - **Features**: Interactive hover effects, multiple colors
 - **Example**: Financial performance over time
 
-## 🔄 Development Workflow
+## Development Workflow
 
 ### Making Changes
 
