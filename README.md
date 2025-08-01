@@ -1,6 +1,6 @@
 # Problem Solver MVP
 
-A sophisticated AI-powered analysis system that combines Markov chain Monte Carlo simulations with interactive HTML visualizations. The system uses a FastAPI backend for computational tools and a Next.js frontend for user interaction.
+A sophisticated AI-powered analysis system that combines Markov chain Monte Carlo simulations with interactive HTML visualizations. The system uses a FastAPI backend (powered by Uvicorn) for computational tools and a Next.js frontend for user interaction.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ Tools/
 │   │   │   └── components/
 │   │   └── package.json
 │   └── worker/       # FastAPI backend
-│       ├── main.py   # Tool implementations
+│       ├── main.py   # Tool implementations (Uvicorn-based)
 │       └── artifacts/ # Generated HTML charts
 ```
 
@@ -39,12 +39,12 @@ npm install
 ### 2. Start the Services
 
 ```bash
-# Terminal 1: Start the FastAPI worker
+# Terminal 1: Start the FastAPI worker with Uvicorn
 cd apps/worker
-python main.py
+uvicorn main:app --reload
 
 # Terminal 2: Start the Next.js frontend
-cd apps/web
+cd ../web
 npm run dev
 ```
 
@@ -85,9 +85,9 @@ npm run dev
 }
 ```
 
-### Interactive Plot (`plot_line`)
+### Interactive Plot (`plot_line` and `plot_bar`)
 
-**Purpose**: Generate interactive HTML charts using Chart.js.
+**Purpose**: Generate interactive HTML charts using Chart.js. `plot_bar` is optimized for stationary distributions, showing each state as a separate bar.
 
 **Parameters**:
 - `series`: Object with data series
@@ -95,7 +95,7 @@ npm run dev
 - `xlabel`: X-axis label
 - `ylabel`: Y-axis label
 
-**Example**:
+**Example (`plot_bar`)**:
 ```json
 {
   "series": {
@@ -108,7 +108,7 @@ npm run dev
 }
 ```
 
-**Output**: HTML file with interactive bar chart
+**Output**: HTML file with an interactive bar chart.
 
 ## 📊 Usage Examples
 
@@ -117,28 +117,28 @@ npm run dev
 **Query**: "Estimate the stationary distribution for T=[[0.9,0.1],[0.2,0.8]] with 1000 trials and 1000 steps"
 
 **What happens**:
-1. AI generates analysis plan
-2. Executes `markov_mcs` with transition matrix
-3. Returns stationary distribution estimates
+1. AI generates analysis plan.
+2. Executes `markov_mcs` with the transition matrix.
+3. Returns stationary distribution estimates.
 
 ### Markov Chain + Visualization
 
 **Query**: "Estimate the stationary distribution for T=[[0.9,0.1],[0.2,0.8]] with 1000 trials and 1000 steps, then plot the stationary distribution"
 
 **What happens**:
-1. AI generates analysis plan
-2. Executes `markov_mcs` to get stationary distribution
-3. **Chains** the result to `plot_line` with real data
-4. Generates interactive bar chart showing probabilities
+1. AI generates analysis plan.
+2. Executes `markov_mcs` to get the stationary distribution.
+3. **Chains** the result to `plot_bar` with the real data.
+4. Generates an interactive bar chart showing the probabilities for each state.
 
 ### Complex Financial Analysis
 
 **Query**: "Plot a comprehensive time series analysis with multiple datasets: Revenue Growth [120,135,148,162,178,195,214,235,258,284], Costs [80,85,92,98,105,112,120,128,137,146], and Profit Margin [33.3,37.0,37.8,39.5,41.0,42.6,43.9,45.5,46.9,48.6]"
 
 **What happens**:
-1. AI generates analysis plan
-2. Executes `plot_line` with multiple data series
-3. Creates interactive line chart with three metrics
+1. AI generates analysis plan.
+2. Executes `plot_line` with multiple data series.
+3. Creates an interactive line chart with the three metrics.
 
 ## 🔧 Tool Chaining
 
@@ -146,57 +146,57 @@ The system supports **automatic tool chaining** where the output of one tool bec
 
 ### How Chaining Works
 
-1. **Parse all tool calls** from AI response
-2. **Execute tools in sequence**
-3. **Replace placeholder data** with real results
-4. **Generate final artifacts**
+1. **Parse all tool calls** from the AI response.
+2. **Execute tools in sequence**.
+3. **Replace placeholder data** with real results.
+4. **Generate final artifacts**.
 
 ### Example Chain
 
 ```javascript
 // AI generates both calls
 TOOL_CALL:markov_mcs:{"transition": [[0.9,0.1],[0.2,0.8]], "steps": 1000, "trials": 10000}
-TOOL_CALL:plot_line:{"series": {"State 0": [0], "State 1": [0]}, "title": "Stationary Distribution"}
+TOOL_CALL:plot_bar:{"series": {"State 0": [0], "State 1": [0]}, "title": "Stationary Distribution"}
 
 // System executes and chains
 1. Run markov_mcs → get stationary_estimate [0.667, 0.333]
-2. Replace plot_line placeholder with real data
-3. Run plot_line → generate HTML chart
+2. Replace plot_bar placeholder with real data.
+3. Run plot_bar → generate HTML chart.
 ```
 
 ## Chart Types
 
 ### Bar Charts (Default for Distributions)
 
-- **Best for**: Stationary distributions, probability comparisons
-- **Features**: Clear state labels, probability scale (0-1)
-- **Example**: Stationary distribution of Markov chain states
+- **Best for**: Stationary distributions, probability comparisons.
+- **Features**: Clear state labels, probability scale (0-1), one bar per state.
+- **Example**: Stationary distribution of Markov chain states.
 
 ### Line Charts
 
-- **Best for**: Time series, multiple data series
-- **Features**: Interactive hover effects, multiple colors
-- **Example**: Financial performance over time
+- **Best for**: Time series, multiple data series.
+- **Features**: Interactive hover effects, multiple colors.
+- **Example**: Financial performance over time.
 
 ## Development Workflow
 
 ### Making Changes
 
-1. **Edit worker code** (`apps/worker/main.py`)
-2. **Restart worker**: `pkill -f "python main.py" && cd apps/worker && python main.py`
-3. **Test changes**: Use curl or the web interface
+1. **Edit worker code** (`apps/worker/main.py`).
+2. **Restart worker**: The `uvicorn --reload` command will automatically restart the server on changes.
+3. **Test changes**: Use curl or the web interface.
 
 ### Adding New Tools
 
-1. **Add tool function** in `main.py`
-2. **Add tool definition** in `apps/web/src/lib/tools.ts`
-3. **Update parsing logic** in `apps/web/src/app/api/solve/route.ts`
+1. **Add tool function** in `main.py`.
+2. **Add tool definition** in `apps/web/src/lib/tools.ts`.
+3. **Update parsing logic** in `apps/web/src/app/api/solve/route.ts`.
 
 ### Debugging
 
-- **Check worker logs**: Look for tool execution messages
-- **Check API logs**: Look for parsing and chaining messages
-- **Test individual tools**: Use curl to test worker endpoints directly
+- **Check worker logs**: Look for tool execution messages in the Uvicorn terminal.
+- **Check API logs**: Look for parsing and chaining messages in the Next.js terminal.
+- **Test individual tools**: Use curl to test worker endpoints directly.
 
 ## Troubleshooting
 
@@ -213,12 +213,12 @@ pip install fastapi uvicorn numpy matplotlib
 - Check if artifacts directory exists: `ls apps/worker/artifacts/`
 
 **Tool chaining not working**:
-- Check API logs for parsing errors
+- Check API logs for parsing errors.
 - Verify both tools are being executed: `jq '.toolResults | length'`
 
 **Blank charts**:
-- Restart worker after code changes
-- Check if real data is being passed to plot tool
+- Restart worker after code changes.
+- Check if real data is being passed to the plot tool.
 
 ### Health Checks
 
@@ -227,14 +227,14 @@ pip install fastapi uvicorn numpy matplotlib
 curl http://localhost:8000/health
 
 # Test individual tools
-curl -X POST http://localhost:8000/tools/markov_mcs \
-  -H "Content-Type: application/json" \
+curl -X POST http://localhost:8000/tools/markov_mcs 
+  -H "Content-Type: application/json" 
   -d '{"transition": [[0.9,0.1],[0.2,0.8]], "steps": 100, "trials": 100}'
 
 # Test plotting
-curl -X POST http://localhost:8000/tools/plot_line \
-  -H "Content-Type: application/json" \
-  -d '{"series": {"Test": [1,2,3]}, "title": "Test Chart"}'
+curl -X POST http://localhost:8000/tools/plot_bar 
+  -H "Content-Type: application/json" 
+  -d '{"series": {"State 0": [0.67], "State 1": [0.33]}, "title": "Test Chart"}'
 ```
 
 ## Advanced Usage
@@ -271,21 +271,22 @@ The AI can generate custom analysis plans for complex problems:
 
 ## Key Features
 
-- ✅ **Interactive HTML Charts**: Professional Chart.js visualizations
-- ✅ **Tool Chaining**: Automatic data flow between tools
-- ✅ **Markov Chain Analysis**: Monte Carlo simulation with confidence intervals
-- ✅ **Real-time Processing**: Immediate results with progress feedback
-- ✅ **Extensible Architecture**: Easy to add new tools and capabilities
-- ✅ **Professional UI**: Clean, responsive web interface
+- ✅ **Interactive HTML Charts**: Professional Chart.js visualizations.
+- ✅ **Tool Chaining**: Automatic data flow between tools.
+- ✅ **Markov Chain Analysis**: Monte Carlo simulation with confidence intervals.
+- ✅ **Real-time Processing**: Immediate results with progress feedback.
+- ✅ **Extensible Architecture**: Easy to add new tools and capabilities.
+- ✅ **Professional UI**: Clean, responsive web interface.
 
 ## Future Enhancements
 
-- **More Chart Types**: Pie charts, histograms, 3D plots
-- **Additional Tools**: Statistical tests, optimization algorithms
-- **Batch Processing**: Handle multiple analyses simultaneously
-- **Export Options**: PDF reports, data downloads
-- **Advanced Chaining**: Conditional tool execution based on results
+- **More Chart Types**: Pie charts, histograms, 3D plots.
+- **Additional Tools**: Statistical tests, optimization algorithms.
+- **Batch Processing**: Handle multiple analyses simultaneously.
+- **Export Options**: PDF reports, data downloads.
+- **Advanced Chaining**: Conditional tool execution based on results.
 
 ---
 
-**Built with**: Next.js, FastAPI, Chart.js, TypeScript, Python 
+**Built with**: Next.js, FastAPI, Uvicorn, Chart.js, TypeScript, Python
+ 

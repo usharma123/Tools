@@ -468,23 +468,24 @@ def plot_bar(args: PlotBarArgs):
     if not args.series:
         return {"error": "No series data provided"}
     
-    # Prepare datasets for Chart.js
-    datasets_js = []
-    for label, data in args.series.items():
-        # For bar chart, we expect single values per state
-        if isinstance(data, list) and len(data) > 0:
-            # Take the last value if it's a trajectory, otherwise use the single value
-            value = data[-1] if len(data) > 1 else data[0]
-            datasets_js.append({
-                "label": label,
-                "data": [value],
-                "backgroundColor": f"rgba({hash(label) % 256}, {(hash(label) >> 8) % 256}, {(hash(label) >> 16) % 256}, 0.6)",
-                "borderColor": f"rgba({hash(label) % 256}, {(hash(label) >> 8) % 256}, {(hash(label) >> 16) % 256}, 1)",
-                "borderWidth": 1
-            })
+    # Prepare a single dataset for Chart.js with multiple bars
+    labels = list(args.series.keys())
+    data_values = [data[0] if isinstance(data, list) and len(data) > 0 else 0 for data in args.series.values()]
     
-    # Convert datasets to proper JavaScript format
-    datasets_js_str = json.dumps(datasets_js)
+    # Generate colors for each bar
+    background_colors = [f"rgba({hash(label) % 256}, {(hash(label) >> 8) % 256}, {(hash(label) >> 16) % 256}, 0.6)" for label in labels]
+    border_colors = [f"rgba({hash(label) % 256}, {(hash(label) >> 8) % 256}, {(hash(label) >> 16) % 256}, 1)" for label in labels]
+    
+    dataset = {
+        "label": args.title or "Distribution",
+        "data": data_values,
+        "backgroundColor": background_colors,
+        "borderColor": border_colors,
+        "borderWidth": 1
+    }
+    
+    # Convert the single dataset to a list of datasets for Chart.js
+    datasets_js_str = json.dumps([dataset])
     
     # Prepare reference lines if provided
     ref_lines_js = ""
