@@ -43,7 +43,6 @@ const plotLineParams = z.object({
   series: z.record(z.string(), z.array(z.number())).optional(),
   series_from: z.string().optional(), // Variable reference like "$markov_mcs.trajectory_data.cumulative_means"
   labels: z.string().optional(), // Variable reference for labels
-  x: z.string().optional(), // Variable reference for x-axis data
   title: z.string().optional(),
   xlabel: z.string().optional(),
   ylabel: z.string().optional(),

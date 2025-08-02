@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar } from "@/lib/tools";
-import { AnalysisPlan, SuccessCriteria } from "@/lib/plan";
+import { ab_test_ttest, plot_bar_with_ci, power_curve, abTestParams, barWithCIParams, powerCurveParams } from "@/lib/tools_ab_power";
+import { AnalysisPlan, SuccessCriteria, materializeArgs } from "@/lib/plan";
 
 export const runtime = "nodejs";
 
@@ -15,42 +16,138 @@ You are Chief Analyst.
 5) Reference any returned artifact_url in your write-up.
 Return a concise Decision and Evidence.
 
+IMPORTANT: Choose tools based on the analysis context:
+- Use markov_mcs for Markov chain analysis, convergence studies, state transitions
+- Use ab_test_ttest for A/B testing, conversion rate comparisons, treatment effects
+- Use power_curve for sample size planning, power analysis, MDE calculations (NO seed parameter)
+- Use plot_* tools for visualization of results
+
 Available tools:
 - markov_mcs: Run Monte Carlo on a Markov chain. Parameters: transition (array of arrays), steps (number), trials (number), metric (stationary/avg_reward/trajectory), track_trajectory (boolean)
 - plot_line: Create a simple line chart. Parameters: series (object with arrays), title (string), xlabel (string), ylabel (string)
 - plot_bar: Create a bar chart. Parameters: series (object with arrays), title (string), xlabel (string), ylabel (string)
+- ab_test_ttest: Two-sample test (binary or continuous). Parameters: binary mode (successes_a, trials_a, successes_b, trials_b) OR continuous mode (mean_a, sd_a, n_a, mean_b, sd_b, n_b), alpha, two_tailed, equal_var (continuous only)
+- plot_bar_with_ci: Bar chart with 95% CI whiskers. Parameters: labels, values, ci_low, ci_high, title, xlabel, ylabel, ylim
+- power_curve: Plot power relationships for two-proportion A/B: either n vs MDE or power vs n. Parameters: mode (mde_vs_n/power_vs_n), baseline, alpha, two_tailed, ratio, power (for mde_vs_n), mde_rel_grid (for mde_vs_n), mde_rel (for power_vs_n), n_grid (for power_vs_n). IMPORTANT: power_curve is deterministic and does NOT accept seed parameter.
 
-AnalysisPlan Schema:
+AnalysisPlan Schema Examples:
+
+For A/B Testing:
 {
-  "objective": "string",
-  "assumptions": ["string"],
+  "objective": "Compare conversion rates between variants A and B",
+  "assumptions": ["Binary outcomes", "Independent samples", "Large enough sample size"],
+  "steps": [
+    {
+      "tool": "ab_test_ttest",
+      "args": {
+        "successes_a": 100,
+        "trials_a": 1000,
+        "successes_b": 120,
+        "trials_b": 1000,
+        "alpha": 0.05,
+        "two_tailed": true
+      }
+    },
+    {
+      "tool": "plot_bar_with_ci",
+      "args": {
+        "labels": ["A", "B"],
+        "values_from": ["$ab_test_ttest.group_a.rate", "$ab_test_ttest.group_b.rate"],
+        "ci_low_from": ["$ab_test_ttest.group_a.ci.0", "$ab_test_ttest.group_b.ci.0"],
+        "ci_high_from": ["$ab_test_ttest.group_a.ci.1", "$ab_test_ttest.group_b.ci.1"],
+        "title": "Conversion by Variant (95% CI)",
+        "ylabel": "Rate"
+      }
+    }
+  ],
+  "success_criteria": {"description": "AB test completed successfully"}
+}
+
+For Power Analysis:
+{
+  "objective": "Determine sample size needed for different MDE levels",
+  "assumptions": ["Two-proportion test", "Equal allocation"],
+  "steps": [
+    {
+      "tool": "power_curve",
+      "args": {
+        "mode": "mde_vs_n",
+        "baseline": 0.05,
+        "alpha": 0.05,
+        "power": 0.8,
+        "two_tailed": true,
+        "ratio": 1.0,
+        "mde_rel_grid": [0.02,0.03,0.04,0.05,0.06,0.08,0.10]
+      }
+    }
+  ],
+  "success_criteria": {"description": "Power curve generated successfully"}
+}
+
+For Comprehensive Power Analysis with Visualizations:
+{
+  "objective": "Analyze power relationships for A/B testing with multiple visualizations",
+  "assumptions": ["Two-proportion test", "Equal allocation", "Fixed baseline rate"],
+  "steps": [
+    {
+      "tool": "power_curve",
+      "args": {
+        "mode": "mde_vs_n",
+        "baseline": 0.05,
+        "alpha": 0.05,
+        "power": 0.8,
+        "two_tailed": true,
+        "ratio": 1.0,
+        "mde_rel_grid": [0.02,0.03,0.04,0.05,0.06,0.08,0.10]
+      }
+    },
+    {
+      "tool": "power_curve",
+      "args": {
+        "mode": "power_vs_n",
+        "baseline": 0.05,
+        "alpha": 0.05,
+        "two_tailed": true,
+        "ratio": 1.0,
+        "mde_rel": 0.20,
+        "n_grid": [2000,4000,6000,8000,10000,15000]
+      }
+    },
+    {
+      "tool": "plot_line",
+      "args": {
+        "series_from": "$power_curve.power",
+        "labels": ["Power vs Sample Size"],
+        "title": "Power vs Sample Size",
+        "xlabel": "Sample Size per Arm",
+        "ylabel": "Power"
+      }
+    }
+  ],
+  "success_criteria": {"description": "Power analysis completed with visualizations"}
+}
+
+For Markov Chain Analysis:
+{
+  "objective": "Analyze convergence of Markov chain",
+  "assumptions": ["Ergodic chain", "Valid transition matrix"],
   "steps": [
     {
       "tool": "markov_mcs",
       "args": {
-        "transition": [[number]],
-        "steps": number,
-        "trials": number,
-        "metric": "stationary|avg_reward|trajectory",
-        "track_trajectory": boolean
+        "transition": [[0.9,0.1],[0.2,0.8]],
+        "steps": 100,
+        "trials": 1000,
+        "metric": "stationary",
+        "track_trajectory": true
       }
-    },
-    {
-      "tool": "plot_line", 
-      "args": {
-        "series": {"State 0": [number], "State 1": [number]},
-        "title": "string",
-        "xlabel": "string", 
-        "ylabel": "string"
-      }
-    },
-    {
-      "tool": "plot_bar", 
-      "args": {
-        "series": {"State 0": [number], "State 1": [number]},
-        "title": "string",
-        "xlabel": "string", 
-        "ylabel": "string"
+    }
+  ],
+  "success_criteria": {"description": "Convergence analysis completed"}
+}
+        "two_tailed": true,
+        "ratio": 1.0,
+        "n_grid": [2000, 4000, 6000, 8000, 10000, 15000]
       }
     }
   ],
@@ -78,6 +175,7 @@ IMPORTANT:
 - Create a bar chart snapshot of stationary estimates alongside the line chart using plot_bar tool
 - For robust analysis, ALWAYS set stability_check: true and auto_tune: true in markov_mcs args
 - The plot_line and plot_bar tools will automatically use real data from markov_mcs results and set appropriate y-axis labels.
+- For AB tests, use variable references to chain results: values: ["$ab_test_ttest.group_a.rate", "$ab_test_ttest.group_b.rate"]
 `;
 
 async function executeTool(toolName: string, params: unknown) {
@@ -88,6 +186,12 @@ async function executeTool(toolName: string, params: unknown) {
       return await plot_line(params);
     } else if (toolName === "plot_bar") {
       return await plot_bar(params);
+    } else if (toolName === "ab_test_ttest") {
+      return await ab_test_ttest(params);
+    } else if (toolName === "plot_bar_with_ci") {
+      return await plot_bar_with_ci(params);
+    } else if (toolName === "power_curve") {
+      return await power_curve(params);
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -120,6 +224,20 @@ function parseAnalysisPlan(text: string): AnalysisPlan | null {
 
 function tvDistance(p: number[], q: number[]): number {
   return 0.5 * p.reduce((s, pi, i) => s + Math.abs(pi - q[i]), 0);
+}
+
+function strictlyDecreasing(arr: number[], eps = 1e-9) {
+  for (let i = 1; i < arr.length; i++) {
+    if (!(arr[i] < arr[i-1] - eps)) return false;
+  }
+  return true;
+}
+
+function strictlyIncreasing(arr: number[], eps = 1e-9) {
+  for (let i = 1; i < arr.length; i++) {
+    if (!(arr[i] > arr[i-1] + eps)) return false;
+  }
+  return true;
 }
 
 function evaluateSuccessCriteria(
@@ -226,6 +344,32 @@ function evaluateSuccessCriteria(
     passed = passed && pass.std_dev;
   }
 
+  // Check MDE monotonicity for power curve results
+  if (criteria.mde_monotonicity && 'n_per_arm_A' in markovResult && 'mde_rel_grid' in markovResult) {
+    const nPerArm = markovResult.n_per_arm_A as number[];
+    const mdeGrid = markovResult.mde_rel_grid as number[];
+    
+    if (nPerArm.length > 1 && mdeGrid.length > 1) {
+      const isMonotonic = strictlyDecreasing(nPerArm);
+      details.mde_monotonicity = isMonotonic;
+      pass.mde_monotonicity = isMonotonic;
+      passed = passed && pass.mde_monotonicity;
+    }
+  }
+
+  // Check power monotonicity for power curve results
+  if (criteria.power_monotonicity && 'power' in markovResult && 'n_grid' in markovResult) {
+    const power = markovResult.power as number[];
+    const nGrid = markovResult.n_grid as number[];
+    
+    if (power.length > 1 && nGrid.length > 1) {
+      const isMonotonic = strictlyIncreasing(power);
+      details.power_monotonicity = isMonotonic;
+      pass.power_monotonicity = isMonotonic;
+      passed = passed && pass.power_monotonicity;
+    }
+  }
+
   // Generate Decision string
   const decisionParts: string[] = [];
   if (criteria.min_trials !== undefined) {
@@ -246,6 +390,14 @@ function evaluateSuccessCriteria(
   if (criteria.max_std_dev !== undefined) {
     const stdDev = details.std_dev as number;
     decisionParts.push(`Std Dev: ${pass.std_dev ? 'PASS' : 'FAIL'} (${stdDev.toFixed(6)} < ${criteria.max_std_dev})`);
+  }
+  if (criteria.mde_monotonicity) {
+    const mdeMonotonic = details.mde_monotonicity as boolean;
+    decisionParts.push(`MDE Monotonicity: ${pass.mde_monotonicity ? 'PASS' : 'FAIL'} (${mdeMonotonic ? 'strictly decreasing' : 'not monotonic'})`);
+  }
+  if (criteria.power_monotonicity) {
+    const powerMonotonic = details.power_monotonicity as boolean;
+    decisionParts.push(`Power Monotonicity: ${pass.power_monotonicity ? 'PASS' : 'FAIL'} (${powerMonotonic ? 'strictly increasing' : 'not monotonic'})`);
   }
 
   const decision = `OVERALL: ${passed ? 'PASS' : 'FAIL'} | ${decisionParts.join(' | ')}`;
@@ -382,12 +534,31 @@ function resolveSingleReference(
 }
 
 export async function POST(req: NextRequest) {
-  const { query } = await req.json();
+  const body = await req.json();
+  const { query, plan } = body;
 
-  const { text } = await generateText({
-    model: openai("gpt-4o-mini"),
-    system: SYSTEM,
-    prompt: `Problem: ${query}
+  let analysisPlan: AnalysisPlan | null = null;
+  let text = "";
+
+  // If a plan is provided directly, use it
+  if (plan) {
+    try {
+      analysisPlan = AnalysisPlan.parse(plan);
+      text = JSON.stringify(plan, null, 2);
+    } catch (error) {
+      return new Response(JSON.stringify({ 
+        error: "Failed to parse provided plan",
+        details: String(error)
+      }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    } else if (query) {
+    // Generate plan using AI
+    const { text: generatedText } = await generateText({
+      model: openai("gpt-4o-mini"),
+      system: SYSTEM,
+      prompt: `Problem: ${query}
 
 IMPORTANT: Output ONLY a valid AnalysisPlan JSON. No other text.
 
@@ -398,36 +569,65 @@ The AnalysisPlan should include:
 - success_criteria: How to measure success
 - report_outline: Sections for the final report
 
-Example for stationary distribution (bar chart):
+Example for power analysis with 4 steps (2 power curves + 2 visualizations):
 {
-  "objective": "Estimate stationary distribution and create visualization",
-  "assumptions": ["Markov chain is ergodic", "Transition matrix is valid"],
+  "objective": "Analyze power relationships for A/B testing with multiple steps and visualization",
+  "assumptions": ["Two-proportion test", "Equal allocation", "Fixed baseline rate"],
   "steps": [
     {
-      "tool": "markov_mcs",
+      "id": "curve_mde",
+      "tool": "power_curve",
       "args": {
-        "transition": [[0.9, 0.1], [0.2, 0.8]],
-        "steps": 1000,
-        "trials": 1000,
-        "seed": 12345
+        "mode": "mde_vs_n",
+        "baseline": 0.05,
+        "alpha": 0.05,
+        "power": 0.8,
+        "two_tailed": true,
+        "ratio": 1.0,
+        "mde_rel_grid": [0.02,0.03,0.04,0.05,0.06,0.08,0.10]
+      }
+    },
+    {
+      "id": "curve_power",
+      "tool": "power_curve",
+      "args": {
+        "mode": "power_vs_n",
+        "baseline": 0.05,
+        "alpha": 0.05,
+        "two_tailed": true,
+        "ratio": 1.0,
+        "mde_rel": 0.20,
+        "n_grid": [2000,4000,6000,8000,10000,15000]
       }
     },
     {
       "tool": "plot_line",
       "args": {
-        "series": {"State 0": [0.667], "State 1": [0.333]},
-        "title": "Stationary Distribution",
-        "xlabel": "States",
-        "ylabel": "Probability"
+        "y_from": "$curve_mde.n_per_arm_A",
+        "x_from": "$curve_mde.mde_rel_grid",
+        "label": "Sample Size vs MDE",
+        "title": "Sample Size vs MDE",
+        "xlabel": "MDE (% relative lift)",
+        "ylabel": "Sample Size per Arm"
+      }
+    },
+    {
+      "tool": "plot_line",
+      "args": {
+        "y_from": "$curve_power.power",
+        "x_from": "$curve_power.n_grid",
+        "label": "Power vs Sample Size",
+        "title": "Power vs Sample Size",
+        "xlabel": "Sample Size per Arm",
+        "ylabel": "Power"
       }
     }
   ],
   "success_criteria": {
-    "description": "Accurate stationary distribution with visualization",
-    "metrics": ["convergence", "visualization_quality"],
-    "ci_width_max": 0.01,
-    "min_trials": 1000,
-    "convergence_threshold": 0.5
+    "description": "Power analysis completed with visualizations and monotonicity checks",
+    "metrics": ["power_curve_generation", "visualization_quality", "monotonicity"],
+    "mde_monotonicity": "n_per_arm_A strictly decreases as MDE increases",
+    "power_monotonicity": "power strictly increases with n"
   },
   "report_outline": ["Decision", "Evidence", "Assumptions", "Limitations", "Next steps"]
 }
@@ -485,14 +685,23 @@ Example for convergence analysis with cumulative shares:
 }
 
 Output ONLY the AnalysisPlan JSON.`,
-  });
+    });
 
-  // Parse and validate the AnalysisPlan
-  const analysisPlan = parseAnalysisPlan(text);
-  if (!analysisPlan) {
+    text = generatedText;
+    
+    // Parse and validate the AnalysisPlan
+    analysisPlan = parseAnalysisPlan(text);
+    if (!analysisPlan) {
+      return new Response(JSON.stringify({ 
+        error: "Failed to parse or validate AnalysisPlan",
+        text: text 
+      }), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+  } else {
     return new Response(JSON.stringify({ 
-      error: "Failed to parse or validate AnalysisPlan",
-      text: text 
+      error: "Either 'query' or 'plan' must be provided"
     }), {
       headers: { "content-type": "application/json" },
     });
@@ -504,28 +713,58 @@ Output ONLY the AnalysisPlan JSON.`,
   // Execute all steps in sequence with chaining
   console.log(`Executing ${analysisPlan.steps.length} steps from AnalysisPlan`);
   
+  // Build results map for materialization
+  const results: Record<string, any> = {};
+  
   for (let i = 0; i < analysisPlan.steps.length; i++) {
     const step = analysisPlan.steps[i];
     console.log(`Executing step ${i + 1}: ${step.tool} with params:`, step.args);
     
     try {
-      // Resolve variable references in args
-      const argsWithTool = { ...step.args, tool: step.tool } as Record<string, unknown>;
-      const resolvedArgs = resolveVariableReferences(argsWithTool, allToolResults);
-      step.args = resolvedArgs as typeof step.args;
+      // Materialize arguments (resolve references to numbers)
+      const materializedArgs = materializeArgs(step.tool, step.args, results);
+      console.log(`Materialized args for ${step.tool}:`, materializedArgs);
       
-      const result = await executeTool(step.tool, step.args);
+      const result = await executeTool(step.tool, materializedArgs);
       allToolResults.push({
         tool: step.tool,
-        params: step.args,
+        params: materializedArgs,
         result
       });
+      // Store results with step ID or index to handle multiple calls to same tool
+      const stepKey = step.id || `${step.tool}_${i + 1}`;
+      results[stepKey] = result;
+      results[step.tool] = result; // Keep original for backward compatibility
       console.log(`Tool result:`, result);
       
-      // Evaluate success criteria after markov_mcs completes
-      if (step.tool === 'markov_mcs' && analysisPlan.success_criteria) {
-        successEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
-        console.log(`Success criteria evaluation:`, successEvaluation);
+      // Evaluate success criteria after markov_mcs or power_curve completes
+      if ((step.tool === 'markov_mcs' || step.tool === 'power_curve') && analysisPlan.success_criteria) {
+        // For power curve tools, we need to check both MDE and power monotonicity
+        if (step.tool === 'power_curve') {
+          // Check if this is the MDE tool (first power curve)
+          if (result.mode === 'mde_vs_n') {
+            const mdeEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
+            console.log(`MDE success criteria evaluation:`, mdeEvaluation);
+            // Store MDE evaluation for later use
+            results['mde_evaluation'] = mdeEvaluation;
+          }
+          // Check if this is the power tool (second power curve)
+          if (result.mode === 'power_vs_n') {
+            const powerEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
+            console.log(`Power success criteria evaluation:`, powerEvaluation);
+            // Combine both evaluations
+            const mdeEval = results['mde_evaluation'] || { passed: true, details: {}, decision: "PASS" };
+            successEvaluation = {
+              passed: mdeEval.passed && powerEvaluation.passed,
+              details: { ...mdeEval.details, ...powerEvaluation.details },
+              decision: `MDE: ${mdeEval.decision} | Power: ${powerEvaluation.decision}`
+            };
+          }
+        } else {
+          // For markov_mcs, use the original logic
+          successEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
+          console.log(`Success criteria evaluation:`, successEvaluation);
+        }
       }
     } catch (error) {
       console.error(`Error executing step ${step.tool}:`, error);
