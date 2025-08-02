@@ -1,6 +1,6 @@
 # Problem Solver MVP
 
-A sophisticated AI-powered analysis system that combines Markov chain Monte Carlo simulations with interactive HTML visualizations. The system uses a FastAPI backend (powered by Uvicorn) for computational tools and a Next.js frontend for user interaction.
+A sophisticated AI-powered analysis system that combines statistical analysis tools (Markov chain Monte Carlo simulations and A/B testing power analysis) with interactive HTML visualizations. The system uses a FastAPI backend (powered by Uvicorn) for computational tools and a Next.js frontend for user interaction.
 
 ## Architecture
 
@@ -14,7 +14,8 @@ Tools/
 │   │   │   │   └── page.tsx            # React frontend
 │   │   │   ├── lib/
 │   │   │   │   ├── tools.ts            # Tool definitions
-│   │   │   │   └── plan.ts             # Analysis plan schemas
+│   │   │   │   ├── tools_ab_power.ts   # A/B testing tool schemas
+│   │   │   │   └── plan.ts             # Analysis plan schemas & reference resolution
 │   │   │   └── components/
 │   │   └── package.json
 │   └── worker/       # FastAPI backend
@@ -29,7 +30,7 @@ Tools/
 ```bash
 # Install Python dependencies for the worker
 cd apps/worker
-pip install fastapi uvicorn numpy matplotlib
+pip install fastapi uvicorn numpy matplotlib scipy
 
 # Install Node.js dependencies for the web app
 cd ../web
@@ -65,6 +66,7 @@ npm run dev
 - `steps`: Number of simulation steps (default: 1000)
 - `trials`: Number of Monte Carlo trials (default: 5000)
 - `metric`: "stationary" or "avg_reward" (default: "stationary")
+- `seed`: Random seed for reproducibility
 
 **Example**:
 ```json
@@ -72,7 +74,8 @@ npm run dev
   "transition": [[0.9, 0.1], [0.2, 0.8]],
   "steps": 1000,
   "trials": 10000,
-  "metric": "stationary"
+  "metric": "stationary",
+  "seed": 12345
 }
 ```
 
@@ -85,30 +88,77 @@ npm run dev
 }
 ```
 
+### Power Curve Analysis (`power_curve`)
+
+**Purpose**: Analyze statistical power for A/B testing with two-proportion tests. Supports two modes: calculating required sample sizes for different minimum detectable effects (MDE), or calculating power at different sample sizes.
+
+**Parameters**:
+- `mode`: "mde_vs_n" or "power_vs_n"
+- `baseline`: Baseline conversion rate (0-1)
+- `alpha`: Significance level (default: 0.05)
+- `two_tailed`: Whether test is two-tailed (default: true)
+- `ratio`: Allocation ratio between groups (default: 1.0)
+- `power`: Target power for MDE mode (default: 0.8)
+- `mde_rel_grid`: Array of relative MDE values for MDE mode
+- `mde_rel`: Fixed relative MDE for power mode
+- `n_grid`: Array of sample sizes for power mode
+
+**Example (MDE mode)**:
+```json
+{
+  "mode": "mde_vs_n",
+  "baseline": 0.05,
+  "mde_rel_grid": [0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1],
+  "power": 0.8,
+  "alpha": 0.05
+}
+```
+
+**Example (Power mode)**:
+```json
+{
+  "mode": "power_vs_n",
+  "baseline": 0.05,
+  "mde_rel": 0.2,
+  "n_grid": [2000, 4000, 6000, 8000, 10000, 15000],
+  "alpha": 0.05
+}
+```
+
+**Output**:
+```json
+{
+  "mode": "mde_vs_n",
+  "n_per_arm_A": [752702, 336101, 189937, 122123, 85198, 48363, 31233],
+  "mde_rel_grid": [0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1]
+}
+```
+
 ### Interactive Plot (`plot_line` and `plot_bar`)
 
 **Purpose**: Generate interactive HTML charts using Chart.js. `plot_bar` is optimized for stationary distributions, showing each state as a separate bar.
 
 **Parameters**:
 - `series`: Object with data series
+- `x`: Optional custom x-axis values
 - `title`: Chart title
 - `xlabel`: X-axis label
 - `ylabel`: Y-axis label
 
-**Example (`plot_bar`)**:
+**Example (`plot_line`)**:
 ```json
 {
   "series": {
-    "State 0": [0.67],
-    "State 1": [0.33]
+    "Power": [0.45, 0.67, 0.82, 0.91, 0.96, 0.99]
   },
-  "title": "Stationary Distribution",
-  "xlabel": "States",
-  "ylabel": "Probability"
+  "x": [2000, 4000, 6000, 8000, 10000, 15000],
+  "title": "Power vs Sample Size",
+  "xlabel": "Sample Size per Arm",
+  "ylabel": "Power"
 }
 ```
 
-**Output**: HTML file with an interactive bar chart.
+**Output**: HTML file with an interactive chart.
 
 ## 📊 Usage Examples
 
@@ -131,6 +181,18 @@ npm run dev
 3. **Chains** the result to `plot_bar` with the real data.
 4. Generates an interactive bar chart showing the probabilities for each state.
 
+### A/B Testing Power Analysis
+
+**Query**: "Run a power analysis for an A/B test comparing conversion rates. Baseline conversion rate is 5%. We want to detect a 20% relative improvement (to 6%). Calculate required sample sizes for different minimum detectable effects: 2%, 3%, 4%, 5%, 6%, 8%, 10% relative lift. Then calculate power at different sample sizes: 2000, 4000, 6000, 8000, 10000, 15000 users per arm for detecting a 20% relative improvement. Create visualizations showing the relationships."
+
+**What happens**:
+1. AI generates a 4-step analysis plan.
+2. Executes `power_curve` in MDE mode to calculate sample sizes vs MDE.
+3. Executes `plot_line` to visualize the MDE→n relationship.
+4. Executes `power_curve` in power mode to calculate power vs sample size.
+5. Executes `plot_line` to visualize the power→n relationship.
+6. Evaluates success criteria including monotonicity checks.
+
 ### Complex Financial Analysis
 
 **Query**: "Plot a comprehensive time series analysis with multiple datasets: Revenue Growth [120,135,148,162,178,195,214,235,258,284], Costs [80,85,92,98,105,112,120,128,137,146], and Profit Margin [33.3,37.0,37.8,39.5,41.0,42.6,43.9,45.5,46.9,48.6]"
@@ -140,28 +202,77 @@ npm run dev
 2. Executes `plot_line` with multiple data series.
 3. Creates an interactive line chart with the three metrics.
 
-## 🔧 Tool Chaining
+## 🔧 Advanced Features
 
-The system supports **automatic tool chaining** where the output of one tool becomes the input of another.
+### Reference Resolution System
 
-### How Chaining Works
+The system supports dynamic data references using `_from` fields in analysis plans. References are resolved to actual numbers before tool execution.
 
-1. **Parse all tool calls** from the AI response.
-2. **Execute tools in sequence**.
-3. **Replace placeholder data** with real results.
-4. **Generate final artifacts**.
+**Example**:
+```json
+{
+  "tool": "plot_line",
+  "args": {
+    "y_from": "$curve_power.power",
+    "x_from": "$curve_power.n_grid",
+    "label": "Power vs Sample Size",
+    "title": "Power vs Sample Size"
+  }
+}
+```
 
-### Example Chain
+**How it works**:
+1. `$curve_power.power` references the `power` field from a previous `power_curve` tool result.
+2. The executor resolves this to the actual array of power values.
+3. The tool receives real numbers, not references.
 
-```javascript
-// AI generates both calls
-TOOL_CALL:markov_mcs:{"transition": [[0.9,0.1],[0.2,0.8]], "steps": 1000, "trials": 10000}
-TOOL_CALL:plot_bar:{"series": {"State 0": [0], "State 1": [0]}, "title": "Stationary Distribution"}
+### Machine-Checkable Success Criteria
 
-// System executes and chains
-1. Run markov_mcs → get stationary_estimate [0.667, 0.333]
-2. Replace plot_bar placeholder with real data.
-3. Run plot_bar → generate HTML chart.
+The system supports automated validation of analysis results with domain-specific checks.
+
+**Example**:
+```json
+{
+  "success_criteria": {
+    "mde_monotonicity": "n_per_arm_A strictly decreases as MDE increases",
+    "power_monotonicity": "power strictly increases with n"
+  }
+}
+```
+
+**Validation**:
+- **MDE Monotonicity**: Verifies that required sample size decreases as minimum detectable effect increases.
+- **Power Monotonicity**: Verifies that statistical power increases as sample size increases.
+- **Numerical Tolerance**: Uses tolerance-based comparison to handle floating-point precision.
+
+### Tool Chaining with Explicit Step IDs
+
+Complex analyses can reference specific tool outputs using explicit step IDs.
+
+**Example**:
+```json
+{
+  "steps": [
+    {
+      "id": "curve_mde",
+      "tool": "power_curve",
+      "args": { "mode": "mde_vs_n", ... }
+    },
+    {
+      "id": "curve_power", 
+      "tool": "power_curve",
+      "args": { "mode": "power_vs_n", ... }
+    },
+    {
+      "tool": "plot_line",
+      "args": {
+        "y_from": "$curve_mde.n_per_arm_A",
+        "x_from": "$curve_mde.mde_rel_grid",
+        "label": "Sample Size vs MDE"
+      }
+    }
+  ]
+}
 ```
 
 ## Chart Types
@@ -174,9 +285,9 @@ TOOL_CALL:plot_bar:{"series": {"State 0": [0], "State 1": [0]}, "title": "Statio
 
 ### Line Charts
 
-- **Best for**: Time series, multiple data series.
-- **Features**: Interactive hover effects, multiple colors.
-- **Example**: Financial performance over time.
+- **Best for**: Time series, multiple data series, power curves.
+- **Features**: Interactive hover effects, multiple colors, custom x-axis values.
+- **Example**: Power vs sample size relationships, financial performance over time.
 
 ## Development Workflow
 
@@ -189,7 +300,7 @@ TOOL_CALL:plot_bar:{"series": {"State 0": [0], "State 1": [0]}, "title": "Statio
 ### Adding New Tools
 
 1. **Add tool function** in `main.py`.
-2. **Add tool definition** in `apps/web/src/lib/tools.ts`.
+2. **Add tool definition** in `apps/web/src/lib/tools.ts` or `tools_ab_power.ts`.
 3. **Update parsing logic** in `apps/web/src/app/api/solve/route.ts`.
 
 ### Debugging
@@ -205,7 +316,7 @@ TOOL_CALL:plot_bar:{"series": {"State 0": [0], "State 1": [0]}, "title": "Statio
 **Worker not starting**:
 ```bash
 # Install missing dependencies
-pip install fastapi uvicorn numpy matplotlib
+pip install fastapi uvicorn numpy matplotlib scipy
 ```
 
 **Charts not showing**:
@@ -220,6 +331,10 @@ pip install fastapi uvicorn numpy matplotlib
 - Restart worker after code changes.
 - Check if real data is being passed to the plot tool.
 
+**Reference resolution errors**:
+- Verify step IDs are unique when calling the same tool multiple times.
+- Check that referenced fields exist in the source tool's output.
+
 ### Health Checks
 
 ```bash
@@ -229,12 +344,17 @@ curl http://localhost:8000/health
 # Test individual tools
 curl -X POST http://localhost:8000/tools/markov_mcs 
   -H "Content-Type: application/json" 
-  -d '{"transition": [[0.9,0.1],[0.2,0.8]], "steps": 100, "trials": 100}'
+  -d '{"transition": [[0.9,0.1],[0.2,0.8]], "steps": 100, "trials": 100, "seed": 12345}'
+
+# Test power curve tool
+curl -X POST http://localhost:8000/tools/power_curve 
+  -H "Content-Type: application/json" 
+  -d '{"mode": "power_vs_n", "baseline": 0.05, "mde_rel": 0.2, "n_grid": [2000,4000,6000], "alpha": 0.05}'
 
 # Test plotting
-curl -X POST http://localhost:8000/tools/plot_bar 
+curl -X POST http://localhost:8000/tools/plot_line 
   -H "Content-Type: application/json" 
-  -d '{"series": {"State 0": [0.67], "State 1": [0.33]}, "title": "Test Chart"}'
+  -d '{"series": {"Power": [0.45,0.67,0.82]}, "x": [2000,4000,6000], "title": "Test Chart"}'
 ```
 
 ## Advanced Usage
@@ -245,19 +365,17 @@ The AI can generate custom analysis plans for complex problems:
 
 ```json
 {
-  "objective": "Analyze market state transitions",
+  "objective": "Analyze A/B testing power relationships",
   "steps": [
-    "Define transition matrix",
-    "Run Monte Carlo simulation",
-    "Calculate stationary distribution",
-    "Visualize results"
+    "Calculate sample sizes for different MDEs",
+    "Visualize MDE→n relationship", 
+    "Calculate power for different sample sizes",
+    "Visualize power→n relationship"
   ],
-  "report_outline": [
-    "Introduction",
-    "Methodology",
-    "Results",
-    "Conclusion"
-  ]
+  "success_criteria": {
+    "mde_monotonicity": "n_per_arm_A strictly decreases as MDE increases",
+    "power_monotonicity": "power strictly increases with n"
+  }
 }
 ```
 
@@ -269,11 +387,16 @@ The AI can generate custom analysis plans for complex problems:
 **Queue Theory**:
 "Model a service queue with transition matrix [[0.3,0.7,0,0],[0.2,0.4,0.4,0],[0,0.3,0.5,0.2],[0.1,0,0.3,0.6]] representing queue lengths 0-3. Run 2500 trials with 1800 steps, calculate the probability of each queue length in steady state, and plot the queue length distribution."
 
+**Comprehensive A/B Testing**:
+"Run a power analysis for an e-commerce A/B test. Baseline conversion rate is 3.2%. We want to detect improvements from 2% to 15% relative lift. Calculate required sample sizes for each MDE, then calculate power at sample sizes from 5000 to 50000 users per arm for detecting a 10% relative improvement. Create visualizations for both relationships and validate the monotonicity of the results."
+
 ## Key Features
 
-- ✅ **Interactive HTML Charts**: Professional Chart.js visualizations.
-- ✅ **Tool Chaining**: Automatic data flow between tools.
-- ✅ **Markov Chain Analysis**: Monte Carlo simulation with confidence intervals.
+- ✅ **Interactive HTML Charts**: Professional Chart.js visualizations with custom x-axis support.
+- ✅ **Advanced Tool Chaining**: Automatic data flow between tools with reference resolution.
+- ✅ **Statistical Analysis**: Markov chain Monte Carlo simulation and A/B testing power analysis.
+- ✅ **Machine-Checkable Validation**: Automated success criteria evaluation with domain-specific checks.
+- ✅ **Reference Resolution**: Dynamic data references using `_from` fields in analysis plans.
 - ✅ **Real-time Processing**: Immediate results with progress feedback.
 - ✅ **Extensible Architecture**: Easy to add new tools and capabilities.
 - ✅ **Professional UI**: Clean, responsive web interface.
@@ -281,12 +404,13 @@ The AI can generate custom analysis plans for complex problems:
 ## Future Enhancements
 
 - **More Chart Types**: Pie charts, histograms, 3D plots.
-- **Additional Tools**: Statistical tests, optimization algorithms.
+- **Additional Statistical Tools**: T-tests, chi-square tests, regression analysis.
 - **Batch Processing**: Handle multiple analyses simultaneously.
 - **Export Options**: PDF reports, data downloads.
 - **Advanced Chaining**: Conditional tool execution based on results.
+- **More Success Criteria**: Additional domain-specific validation rules.
 
 ---
 
-**Built with**: Next.js, FastAPI, Uvicorn, Chart.js, TypeScript, Python
+**Built with**: Next.js, FastAPI, Uvicorn, Chart.js, TypeScript, Python, SciPy
  
