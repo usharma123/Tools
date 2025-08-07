@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
+import { forecast_arima as forecast_arima_adapter } from "@/lib/tools_forecast";
 import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve, abTestParams as abTestParamsA, barWithCIParams as barWithCIParamsA, powerCurveParams } from "@/lib/tools_ab_power";
 import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B, abTestParams as abTestParamsB, barCIParams as barCIParamsB } from "@/lib/tools_stats";
 import { causal_impact } from "@/lib/tools_causal";
@@ -199,8 +200,10 @@ async function executeTool(toolName: string, params: unknown) {
       try { return await plot_bar_with_ci_B(params); } catch { return await plot_bar_with_ci_A(params); }
     } else if (toolName === "power_curve") {
       return await power_curve(params);
-    } else if (toolName === "causal_impact") {
+  } else if (toolName === "causal_impact") {
       return await causal_impact(params);
+    } else if (toolName === "forecast_arima") {
+      return await forecast_arima_adapter(params);
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }

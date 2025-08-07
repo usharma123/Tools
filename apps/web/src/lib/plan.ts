@@ -2,6 +2,7 @@ import { z } from "zod";
 import { abTestParams as abParamsA, barWithCIParams as barParamsA, powerCurveParams } from "./tools_ab_power";
 import { abTestParams as abParamsB, barCIParams as barParamsB } from "./tools_stats";
 import { didParams } from "./tools_causal";
+import { arimaParams } from "./tools_forecast";
 
 // Helper function to get value by path
 function getByPath(obj: any, path: string) {
@@ -30,6 +31,39 @@ function resolveRef(v: any, results: Record<string, any>) {
 export function materializeArgs(toolName: string, args: any, results: Record<string, any>) {
   const out: any = {};
   for (const [k, v] of Object.entries(args)) out[k] = resolveRef(v, results);
+
+  // Lightweight ref-ops for numbers/arrays
+  function applyOp(value: any, op: string, extra: any) {
+    switch (op) {
+      case "last_k_mean": {
+        const k = extra?.k ?? 10;
+        if (!Array.isArray(value) || value.length === 0) return value;
+        const slice = value.slice(-k);
+        return slice.reduce((a: number, b: number) => a + (Number(b) || 0), 0) / slice.length;
+      }
+      case "divide": {
+        const byRef = extra?.by;
+        const denom = typeof byRef === "string" ? resolveRef(byRef, results) : byRef;
+        return typeof value === "number" && typeof denom === "number" && denom !== 0 ? value / denom : null;
+      }
+      default:
+        return value;
+    }
+  }
+
+  function resolveRefWithOps(v: any): any {
+    if (v && typeof v === "object" && "ref" in v) {
+      const raw = resolveRef((v as any).ref, results);
+      return (v as any).op ? applyOp(raw, (v as any).op, v) : raw;
+    }
+    return v;
+  }
+
+  for (const [k, v] of Object.entries(args)) {
+    if (v && typeof v === "object" && (v as any).ref) {
+      out[k] = resolveRefWithOps(v);
+    }
+  }
 
   // Strip non-applicable parameters for deterministic tools
   if (toolName === "power_curve") {
@@ -87,6 +121,16 @@ export function materializeArgs(toolName: string, args: any, results: Record<str
     }
     delete out.series_from;
     delete out.labels;
+  }
+
+  // For plot_line that only provides series_from (single series)
+  if (toolName === "plot_line" && args.series_from && !args.labels) {
+    const seriesData = resolveRef(args.series_from, results);
+    if (Array.isArray(seriesData)) {
+      const labelName = typeof args.label === "string" ? args.label : "Series";
+      out.series = { [labelName]: seriesData };
+      delete out.series_from;
+    }
   }
 
   // For plot_line that uses y_from + x_from + label (single series)
@@ -228,6 +272,11 @@ export const Step = z.discriminatedUnion("tool", [
     id: z.string().optional(),
     tool: z.literal("causal_impact"),
     args: didParams,
+  }),
+  z.object({
+    id: z.string().optional(),
+    tool: z.literal("forecast_arima"),
+    args: arimaParams,
   }),
 ]);
 
