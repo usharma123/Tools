@@ -2,7 +2,9 @@ import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
-import { ab_test_ttest, plot_bar_with_ci, power_curve, abTestParams, barWithCIParams, powerCurveParams } from "@/lib/tools_ab_power";
+import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve, abTestParams as abTestParamsA, barWithCIParams as barWithCIParamsA, powerCurveParams } from "@/lib/tools_ab_power";
+import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B, abTestParams as abTestParamsB, barCIParams as barCIParamsB } from "@/lib/tools_stats";
+import { causal_impact } from "@/lib/tools_causal";
 import { AnalysisPlan, SuccessCriteria, materializeArgs } from "@/lib/plan";
 
 export const runtime = "nodejs";
@@ -20,7 +22,8 @@ IMPORTANT: Choose tools based on the analysis context:
 - Use markov_mcs for Markov chain analysis, convergence studies, state transitions
 - Use ab_test_ttest for A/B testing, conversion rate comparisons, treatment effects
 - Use power_curve for sample size planning, power analysis, MDE calculations (NO seed parameter)
-- Use plot_* tools for visualization of results
+ - Use plot_* tools for visualization of results
+ - Use causal_impact for diff-in-diff causal analysis on panel data (treated vs control over time)
 
 Available tools:
 - markov_mcs: Run Monte Carlo on a Markov chain. Parameters: transition (array of arrays), steps (number), trials (number), metric (stationary/avg_reward/trajectory), track_trajectory (boolean)
@@ -28,7 +31,8 @@ Available tools:
 - plot_bar: Create a bar chart. Parameters: series (object with arrays), title (string), xlabel (string), ylabel (string)
 - ab_test_ttest: Two-sample test (binary or continuous). Parameters: binary mode (successes_a, trials_a, successes_b, trials_b) OR continuous mode (mean_a, sd_a, n_a, mean_b, sd_b, n_b), alpha, two_tailed, equal_var (continuous only)
 - plot_bar_with_ci: Bar chart with 95% CI whiskers. Parameters: labels, values, ci_low, ci_high, title, xlabel, ylabel, ylim
-- power_curve: Plot power relationships for two-proportion A/B: either n vs MDE or power vs n. Parameters: mode (mde_vs_n/power_vs_n), baseline, alpha, two_tailed, ratio, power (for mde_vs_n), mde_rel_grid (for mde_vs_n), mde_rel (for power_vs_n), n_grid (for power_vs_n). IMPORTANT: power_curve is deterministic and does NOT accept seed parameter.
+ - power_curve: Plot power relationships for two-proportion A/B: either n vs MDE or power vs n. Parameters: mode (mde_vs_n/power_vs_n), baseline, alpha, two_tailed, ratio, power (for mde_vs_n), mde_rel_grid (for mde_vs_n), mde_rel (for power_vs_n), n_grid (for power_vs_n). IMPORTANT: power_curve is deterministic and does NOT accept seed parameter.
+ - causal_impact: Diff-in-diff causal impact. Parameters: csv (string), date_col (string), metric_col (string), entity_col (string), treated_entity (string), pre_period ([start,end]), post_period ([start,end])
 
 AnalysisPlan Schema Examples:
 
@@ -189,11 +193,14 @@ async function executeTool(toolName: string, params: unknown) {
     } else if (toolName === "summarize_results") {
       return await summarize_results(params);
     } else if (toolName === "ab_test_ttest") {
-      return await ab_test_ttest(params);
+      // try new stats adapter first, fallback to legacy
+      try { return await ab_test_ttest_B(params); } catch { return await ab_test_ttest_A(params); }
     } else if (toolName === "plot_bar_with_ci") {
-      return await plot_bar_with_ci(params);
+      try { return await plot_bar_with_ci_B(params); } catch { return await plot_bar_with_ci_A(params); }
     } else if (toolName === "power_curve") {
       return await power_curve(params);
+    } else if (toolName === "causal_impact") {
+      return await causal_impact(params);
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }

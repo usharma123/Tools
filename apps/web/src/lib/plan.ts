@@ -1,5 +1,7 @@
 import { z } from "zod";
-import { abTestParams, barWithCIParams, powerCurveParams } from "./tools_ab_power";
+import { abTestParams as abParamsA, barWithCIParams as barParamsA, powerCurveParams } from "./tools_ab_power";
+import { abTestParams as abParamsB, barCIParams as barParamsB } from "./tools_stats";
+import { didParams } from "./tools_causal";
 
 // Helper function to get value by path
 function getByPath(obj: any, path: string) {
@@ -190,14 +192,15 @@ export const Step = z.discriminatedUnion("tool", [
   z.object({
     id: z.string().optional(),
     tool: z.literal("ab_test_ttest"),
-    args: abTestParams,
+    args: z.union([abParamsA, abParamsB]),
   }),
   z.object({
     id: z.string().optional(),
     tool: z.literal("plot_bar_with_ci"),
     args: z.union([
-      // Original strict schema
-      barWithCIParams,
+      // Original strict schema (older module) and new stats module
+      barParamsA,
+      barParamsB,
       // Reference-based schema
       z.object({
         labels: z.array(z.string()).min(1),
@@ -220,6 +223,11 @@ export const Step = z.discriminatedUnion("tool", [
     id: z.string().optional(),
     tool: z.literal("summarize_results"),
     args: SummarizeResultsArgs,
+  }),
+  z.object({
+    id: z.string().optional(),
+    tool: z.literal("causal_impact"),
+    args: didParams,
   }),
 ]);
 
