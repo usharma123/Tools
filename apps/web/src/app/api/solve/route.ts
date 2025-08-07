@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
-import { run_markov_mcs, plot_line, plot_bar } from "@/lib/tools";
+import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
 import { ab_test_ttest, plot_bar_with_ci, power_curve, abTestParams, barWithCIParams, powerCurveParams } from "@/lib/tools_ab_power";
 import { AnalysisPlan, SuccessCriteria, materializeArgs } from "@/lib/plan";
 
@@ -186,6 +186,8 @@ async function executeTool(toolName: string, params: unknown) {
       return await plot_line(params);
     } else if (toolName === "plot_bar") {
       return await plot_bar(params);
+    } else if (toolName === "summarize_results") {
+      return await summarize_results(params);
     } else if (toolName === "ab_test_ttest") {
       return await ab_test_ttest(params);
     } else if (toolName === "plot_bar_with_ci") {
@@ -227,15 +229,19 @@ function tvDistance(p: number[], q: number[]): number {
 }
 
 function strictlyDecreasing(arr: number[], eps = 1e-9) {
+  if (!Array.isArray(arr) || arr.length < 2) return false;
   for (let i = 1; i < arr.length; i++) {
-    if (!(arr[i] < arr[i-1] - eps)) return false;
+    const d = arr[i] - arr[i - 1];
+    if (!(d < -Math.abs(eps))) return false;
   }
   return true;
 }
 
 function strictlyIncreasing(arr: number[], eps = 1e-9) {
+  if (!Array.isArray(arr) || arr.length < 2) return false;
   for (let i = 1; i < arr.length; i++) {
-    if (!(arr[i] > arr[i-1] + eps)) return false;
+    const d = arr[i] - arr[i - 1];
+    if (!(d > Math.abs(eps))) return false;
   }
   return true;
 }
@@ -614,12 +620,24 @@ Example for power analysis with 4 steps (2 power curves + 2 visualizations):
     {
       "tool": "plot_line",
       "args": {
+        "y_from": "$curve_mde.n_total",
+        "x_from": "$curve_mde.mde_rel_grid",
+        "label": "Total N",
+        "title": "Total Sample vs MDE",
+        "xlabel": "MDE (% lift)",
+        "ylabel": "Total Sample Size"
+      }
+    },
+    {
+      "tool": "plot_line",
+      "args": {
         "y_from": "$curve_power.power",
         "x_from": "$curve_power.n_grid",
         "label": "Power vs Sample Size",
         "title": "Power vs Sample Size",
         "xlabel": "Sample Size per Arm",
-        "ylabel": "Power"
+        "ylabel": "Power",
+        "ylim": [0,1]
       }
     }
   ],
@@ -731,6 +749,11 @@ Output ONLY the AnalysisPlan JSON.`,
         params: materializedArgs,
         result
       });
+      try {
+        const tv = (result as any)?.tool_version;
+        const rt = (result as any)?.runtime_ms;
+        console.log(step.tool, tv, rt);
+      } catch {}
       // Store results with step ID or index to handle multiple calls to same tool
       const stepKey = step.id || `${step.tool}_${i + 1}`;
       results[stepKey] = result;
@@ -753,11 +776,14 @@ Output ONLY the AnalysisPlan JSON.`,
             const powerEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
             console.log(`Power success criteria evaluation:`, powerEvaluation);
             // Combine both evaluations
-            const mdeEval = results['mde_evaluation'] || { passed: true, details: {}, decision: "PASS" };
+            const mdeEval = (results['mde_evaluation'] as any) || { passed: true, details: {}, decision: "PASS" };
+            const mergedDetails = { ...mdeEval.details, ...powerEvaluation.details } as Record<string, unknown>;
+            const mdePass = Boolean((mergedDetails as any).mde_monotonicity);
+            const powerPass = Boolean((mergedDetails as any).power_monotonicity);
             successEvaluation = {
-              passed: mdeEval.passed && powerEvaluation.passed,
-              details: { ...mdeEval.details, ...powerEvaluation.details },
-              decision: `MDE: ${mdeEval.decision} | Power: ${powerEvaluation.decision}`
+              passed: (mdeEval?.passed ?? true) && powerEvaluation.passed,
+              details: mergedDetails,
+              decision: `MDE: ${mdePass ? 'PASS' : 'FAIL'} | Power: ${powerPass ? 'PASS' : 'FAIL'}`
             };
           }
         } else {
@@ -774,6 +800,24 @@ Output ONLY the AnalysisPlan JSON.`,
         result: { error: String(error) }
       });
     }
+  }
+
+  // Auto-summarize results if there were any analytical steps
+  try {
+    const summaryPayload: Record<string, unknown> = {};
+    const mk = allToolResults.find(r => r.tool === 'markov_mcs')?.result;
+    const ab = allToolResults.find(r => r.tool === 'ab_test_ttest')?.result;
+    const pc = allToolResults.find(r => r.tool === 'power_curve')?.result;
+    if (mk) summaryPayload.markov = mk;
+    if (ab) summaryPayload.ab_test = ab;
+    if (pc) summaryPayload.power_curve = pc;
+    if (Object.keys(summaryPayload).length > 0) {
+      const summaryResult = await executeTool('summarize_results', summaryPayload);
+      allToolResults.push({ tool: 'summarize_results', params: summaryPayload, result: summaryResult });
+    }
+  } catch (e) {
+    // Non-fatal
+    allToolResults.push({ tool: 'summarize_results', params: {}, result: { error: String(e) } });
   }
 
   return new Response(JSON.stringify({ 

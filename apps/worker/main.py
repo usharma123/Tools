@@ -12,6 +12,7 @@ import json
 import math
 import time
 from scipy import stats
+from textwrap import shorten
 
 app = FastAPI(title="Agent Tools")
 
@@ -425,7 +426,7 @@ class PlotBarArgs(BaseModel):
 
 @app.post("/tools/plot_line")
 def plot_line(args: PlotArgs):
-    # Generate Chart.js HTML
+    # Generate Chart.js HTML and a PNG base64 using matplotlib for convenience
     title = args.title or "Line Chart"
     xlabel = args.xlabel or "Index"
     ylabel = args.ylabel or "Value"
@@ -564,6 +565,26 @@ def plot_line(args: PlotArgs):
 </html>
 """
     
+    # Create a Matplotlib static image (base64)
+    try:
+        fig, ax = plt.subplots(figsize=(6, 3))
+        # X-axis: use args.x if provided else range based on first series
+        first_series = next(iter(args.series.values()))
+        x_vals = args.x if args.x is not None else list(range(1, len(first_series) + 1))
+        for label, ys in args.series.items():
+            ax.plot(x_vals, ys, label=str(label))
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        if len(args.series) > 1:
+            ax.legend(loc="best")
+        if args.ref_lines_y:
+            for y in args.ref_lines_y:
+                ax.axhline(y, color="black", linestyle="--", alpha=0.4)
+        img_b64 = _fig_to_data_url(fig)
+    except Exception:
+        img_b64 = None
+
     # Save HTML to a file and return the URL
     import os
     import uuid
@@ -578,12 +599,113 @@ def plot_line(args: PlotArgs):
     with open(filepath, 'w') as f:
         f.write(html_content)
     
-    # Return the URL to the HTML file
-    return {"artifact_url": f"/artifacts/{filename}"}
+    # Return the URL to the HTML file and base64 image
+    out = {"artifact_url": f"/artifacts/{filename}"}
+    if img_b64:
+        out["image_base64"] = img_b64
+    return out
+
+# --------------------------
+# Summarize Results endpoint
+# --------------------------
+class SummarizeInputs(BaseModel):
+    markov: Optional[Dict[str, Any]] = None
+    ab_test: Optional[Dict[str, Any]] = None
+    power_curve: Optional[Dict[str, Any]] = None
+    notes: Optional[str] = None
+
+@app.post("/tools/summarize_results")
+def summarize_results(args: SummarizeInputs) -> Dict[str, Any]:
+    paragraphs: list[str] = []
+
+    if args.markov:
+        mk = args.markov
+        section = []
+        if "stationary_estimate" in mk:
+            pi = mk["stationary_estimate"]
+            section.append(
+                f"Estimated stationary distribution: {', '.join(f'{p:.3f}' for p in pi)}."
+            )
+        if "tv_distance" in mk:
+            section.append(f"Total-variation distance to true stationary: {mk['tv_distance']:.4f}.")
+        if "max_ci_width" in mk:
+            section.append(f"Max 95% CI width across states: {mk['max_ci_width']:.4f}.")
+        if "spectral_analysis" in mk and isinstance(mk["spectral_analysis"], dict):
+            sg = mk["spectral_analysis"].get("spectral_gap")
+            if sg is not None:
+                section.append(f"Spectral gap ≈ {sg:.4f}, indicating convergence rate 1-λ2.")
+        if section:
+            interpret = []
+            if "tv_distance" in mk:
+                tv = float(mk["tv_distance"])  # closeness to target
+                interpret.append(
+                    "TV distance measures how close the estimated distribution is to the true stationary distribution; values near 0 indicate good convergence."
+                )
+                if tv < 0.02:
+                    interpret.append("This suggests the simulation has effectively converged.")
+                else:
+                    interpret.append("Consider increasing steps/trials to tighten convergence.")
+            if "max_ci_width" in mk:
+                interpret.append(
+                    "Narrow confidence intervals indicate precise estimates of long‑run state probabilities."
+                )
+            paragraphs.append(
+                "Markov chain results: " + " ".join(section) + " " + " ".join(interpret)
+            )
+
+    if args.ab_test:
+        ab = args.ab_test
+        if ab.get("mode") == "binary":
+            pa = ab.get("group_a", {}).get("rate")
+            pb = ab.get("group_b", {}).get("rate")
+            pval = ab.get("p_value")
+            effect = ab.get("effect", {}).get("value")
+            if pa is not None and pb is not None and pval is not None and effect is not None:
+                significance = "statistically significant" if pval < 0.05 else "not statistically significant"
+                direction = "increase" if effect > 0 else "decrease"
+                paragraphs.append(
+                    f"A/B test (binary): variant A={pa:.3f}, B={pb:.3f} (a {abs(effect):.3f} {direction}). The difference is {significance} at α=0.05 (p={pval:.3g}). This means you {('can' if pval<0.05 else 'cannot')} attribute the observed change to the treatment with high confidence."
+                )
+        elif ab.get("mode") == "continuous":
+            diff = ab.get("effect", {}).get("value")
+            pval = ab.get("p_value")
+            if diff is not None and pval is not None:
+                significance = "statistically significant" if pval < 0.05 else "not statistically significant"
+                paragraphs.append(
+                    f"A/B test (continuous): mean difference {diff:+.3f}; this is {significance} at α=0.05 (p={pval:.3g}). Interpreted practically, the treatment {('shifts the mean' if pval<0.05 else 'does not show a reliable mean shift given the data')}."
+                )
+
+    if args.power_curve:
+        pc = args.power_curve
+        if pc.get("mode") == "mde_vs_n":
+            grid = pc.get("mde_rel_grid", [])
+            nA = pc.get("n_per_arm_A", [])
+            if grid and nA:
+                alpha = pc.get("alpha", 0.05)
+                power = pc.get("power", 0.8)
+                paragraphs.append(
+                    f"Power planning: with α={alpha} and target power≈{power}, to detect {grid[0]*100:.1f}% relative lift you need roughly n≈{int(nA[0])} per arm; for {grid[-1]*100:.1f}% lift, about n≈{int(nA[-1])}. Smaller detectable lifts require much larger samples, so pick the MDE that aligns with business impact and feasibility."
+                )
+        if pc.get("mode") == "power_vs_n":
+            ngrid = pc.get("n_grid", [])
+            power = pc.get("power", [])
+            if ngrid and power:
+                paragraphs.append(
+                    f"Power growth with sample size: at n={int(ngrid[0])} per arm, power≈{power[0]:.2f}; at n={int(ngrid[-1])}, power≈{power[-1]:.2f}. This curve helps choose a sample size that achieves at least 0.8 power without over-spending traffic."
+                )
+
+    if args.notes:
+        paragraphs.append(shorten(args.notes, width=280, placeholder="…"))
+
+    if not paragraphs:
+        paragraphs.append("No results provided to summarize.")
+
+    summary = " ".join(paragraphs)
+    return {"summary": summary}
 
 @app.post("/tools/plot_bar")
 def plot_bar(args: PlotBarArgs):
-    # Generate Chart.js HTML for bar chart
+    # Generate Chart.js HTML for bar chart and a PNG base64 using matplotlib
     if not args.series:
         return {"error": "No series data provided"}
     
@@ -714,6 +836,20 @@ def plot_bar(args: PlotBarArgs):
 </html>
 """
     
+    # Create a Matplotlib static image (base64)
+    try:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        ax.bar(labels, data_values, color="#9BD0F5")
+        ax.set_title(args.title or "Bar Chart")
+        ax.set_xlabel(args.xlabel or "States")
+        ax.set_ylabel(args.ylabel or "Probability")
+        if args.ref_lines_y:
+            for y in args.ref_lines_y:
+                ax.axhline(y, color="black", linestyle="--", alpha=0.4)
+        img_b64_bar = _fig_to_data_url(fig)
+    except Exception:
+        img_b64_bar = None
+
     # Save HTML to a file and return the URL
     import os
     import uuid
@@ -728,8 +864,11 @@ def plot_bar(args: PlotBarArgs):
     with open(filepath, 'w') as f:
         f.write(html_content)
     
-    # Return the URL to the HTML file
-    return {"artifact_url": f"/artifacts/{filename}"}
+    # Return the URL to the HTML file and base64 image
+    out = {"artifact_url": f"/artifacts/{filename}"}
+    if img_b64_bar:
+        out["image_base64"] = img_b64_bar
+    return out
 
 # Bar chart with CI whiskers
 class BarWithCIArgs(BaseModel):
@@ -936,6 +1075,22 @@ def plot_bar_with_ci(args: BarWithCIArgs):
 </html>
 """
     
+    # Create a Matplotlib static image (base64)
+    try:
+        fig, ax = plt.subplots(figsize=(5.5, 3.2))
+        x = np.arange(len(args.labels))
+        ax.bar(x, args.values, color="#9BD0F5", edgecolor="#4B9CD3")
+        ax.errorbar(x, args.values, yerr=[np.array(args.values)-np.array(args.ci_low), np.array(args.ci_high)-np.array(args.values)], fmt='none', ecolor='black', elinewidth=1, capsize=3)
+        ax.set_xticks(x, args.labels)
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        if args.ylim and len(args.ylim) == 2:
+            ax.set_ylim(args.ylim[0], args.ylim[1])
+        img_b64_ci = _fig_to_data_url(fig)
+    except Exception:
+        img_b64_ci = None
+
     # Save HTML to a file and return the URL
     import os
     import uuid
@@ -950,8 +1105,11 @@ def plot_bar_with_ci(args: BarWithCIArgs):
     with open(filepath, 'w') as f:
         f.write(html_content)
     
-    # Return the URL to the HTML file
-    return {"artifact_url": f"/artifacts/{filename}"}
+    # Return the URL to the HTML file and base64 image
+    out = {"artifact_url": f"/artifacts/{filename}"}
+    if img_b64_ci:
+        out["image_base64"] = img_b64_ci
+    return out
 
 # Power Curve functionality for A/B testing
 def _n_per_arm_for_mde(
@@ -1061,8 +1219,8 @@ def power_curve(args: PowerCurveArgs) -> Dict[str, Any]:
         datasets.append({
             'label': 'total N',
             'data': nTotal,
-            'borderColor': colors[2],
-            'backgroundColor': colors[2] + '20',
+            'borderColor': 'rgba(0,0,0,0.25)',
+            'backgroundColor': 'rgba(0,0,0,0.05)',
             'fill': False,
             'tension': 0.1
         })
@@ -1159,22 +1317,21 @@ def power_curve(args: PowerCurveArgs) -> Dict[str, Any]:
 </html>
 """
         
-        # Save HTML to a file and return the URL
-        import os
-        import uuid
-        
-        # Create artifacts directory if it doesn't exist
-        os.makedirs('artifacts', exist_ok=True)
-        
-        # Generate unique filename
-        filename = f"power_curve_mde_{uuid.uuid4().hex[:8]}.html"
-        filepath = os.path.join('artifacts', filename)
-        
-        with open(filepath, 'w') as f:
-            f.write(html_content)
-        
-        url = f"/artifacts/{filename}"
-        
+        # Also build a PNG for data-URL
+        try:
+            fig, ax = plt.subplots(figsize=(6.5, 3.5))
+            ax.plot([x*100 for x in xs], nA_list, label='n per arm (A)')
+            ax.plot([x*100 for x in xs], nTotal, label='total N', color='k', alpha=0.25)
+            if abs(args.ratio - 1.0) > 1e-12:
+                ax.plot([x*100 for x in xs], nB_list, label='n per arm (B)')
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.legend()
+            data_url = _fig_to_data_url(fig)
+        except Exception:
+            data_url = None
+
         out = {
             "tool_version": "power_curve/0.1.0",
             "mode": "mde_vs_n",
@@ -1186,7 +1343,7 @@ def power_curve(args: PowerCurveArgs) -> Dict[str, Any]:
             "n_per_arm_A": nA_list,
             "n_per_arm_B": nB_list,
             "n_total": nTotal,
-            "artifact_url": url
+            "artifact_url": data_url if data_url else None
         }
 
     elif args.mode == "power_vs_n":
@@ -1323,21 +1480,19 @@ def power_curve(args: PowerCurveArgs) -> Dict[str, Any]:
 </html>
 """
         
-        # Save HTML to a file and return the URL
-        import os
-        import uuid
-        
-        # Create artifacts directory if it doesn't exist
-        os.makedirs('artifacts', exist_ok=True)
-        
-        # Generate unique filename
-        filename = f"power_curve_power_{uuid.uuid4().hex[:8]}.html"
-        filepath = os.path.join('artifacts', filename)
-        
-        with open(filepath, 'w') as f:
-            f.write(html_content)
-        
-        url = f"/artifacts/{filename}"
+        # Also build a PNG for data-URL
+        try:
+            fig, ax = plt.subplots(figsize=(6.5, 3.5))
+            ax.plot(xs, powers, label=f'power at MDE={args.mde_rel*100:.1f}%')
+            ax.axhline(0.8, color='k', linestyle='--', alpha=0.3, label='target power (0.8)')
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.set_ylim(0,1)
+            ax.legend()
+            data_url = _fig_to_data_url(fig)
+        except Exception:
+            data_url = None
         
         out = {
             "tool_version": "power_curve/0.1.0",
@@ -1348,10 +1503,11 @@ def power_curve(args: PowerCurveArgs) -> Dict[str, Any]:
             "mde_rel": args.mde_rel,
             "n_grid": xs.tolist(),
             "power": powers,
-            "artifact_url": url
+            "artifact_url": data_url if data_url else None
         }
     else:
         raise ValueError("mode must be 'mde_vs_n' or 'power_vs_n'")
 
     out["runtime_ms"] = (time.perf_counter() - t0) * 1000.0
+    out["tool_version"] = out.get("tool_version", "power_curve/0.1.0")
     return out

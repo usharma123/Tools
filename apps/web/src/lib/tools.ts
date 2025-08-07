@@ -103,3 +103,34 @@ export async function plot_bar(args: unknown) {
     throw new Error(`Failed to call plot_bar: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
+
+// Summarize results tool
+const summarizeParams = z.object({
+  markov: z.any().optional(),
+  ab_test: z.any().optional(),
+  power_curve: z.any().optional(),
+  notes: z.string().optional(),
+});
+
+export async function summarize_results(args: unknown) {
+  const parsed = summarizeParams.parse(args);
+  try {
+    const res = await fetch(`${WORKER}/tools/summarize_results`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(parsed),
+    });
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`summarize_results failed: ${res.status} - ${errorText}`);
+    }
+    const responseText = await res.text();
+    if (!responseText) {
+      throw new Error("Empty response from worker");
+    }
+    return JSON.parse(responseText);
+  } catch (error) {
+    console.error("Error calling summarize_results:", String(error));
+    throw new Error(`Failed to call summarize_results: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}

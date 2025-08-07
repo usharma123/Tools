@@ -19,14 +19,21 @@ function resolveRef(v: any, results: Record<string, any>) {
   if (!source && toolNameWithIndex.includes("_")) {
     source = results[toolNameWithIndex];
   }
-  
-  return getByPath(source, rest.join("."));
+  const path = rest.join(".");
+  if (!path) return source; // allow "$tool" to resolve to the entire result object
+  return getByPath(source, path);
 }
 
 // Helper function to materialize arguments
 export function materializeArgs(toolName: string, args: any, results: Record<string, any>) {
   const out: any = {};
   for (const [k, v] of Object.entries(args)) out[k] = resolveRef(v, results);
+
+  // Strip non-applicable parameters for deterministic tools
+  if (toolName === "power_curve") {
+    // Ensure no seed or randomness-related fields sneak in
+    if ("seed" in out) delete out.seed;
+  }
 
   // Special handling for plot_bar_with_ci ref-forms
   if (toolName === "plot_bar_with_ci") {
@@ -47,24 +54,32 @@ export function materializeArgs(toolName: string, args: any, results: Record<str
   // For plot_line that uses series_from + labels + x
   if (toolName === "plot_line" && args.series_from && args.labels) {
     const seriesData = resolveRef(args.series_from, results);
-    const labels = resolveRef(args.labels, results);
-    
+    const labelsResolved = resolveRef(args.labels, results);
+
+    // Normalize labels into a flat string array
+    const labelArray: string[] = Array.isArray(labelsResolved)
+      ? labelsResolved.map((r: any) => (typeof r === "string" ? r : String(r)))
+      : [String(labelsResolved)];
+
     // Handle both 1D and 2D series data
     if (Array.isArray(seriesData) && seriesData.length > 0) {
       if (Array.isArray(seriesData[0])) {
-        // 2D array case (multiple series)
+        // 2D case. seriesData could be shaped as [steps][states] or [series][steps].
         const Y: number[][] = seriesData;
-        const labelArray: string[] = Array.isArray(labels) 
-          ? labels.map((r: any) => typeof r === 'string' ? r : String(r))
-          : [String(labels)];
+        const looksLikeStepsByStates = Array.isArray(Y[0]) && Y[0].length === labelArray.length;
+        // If rows are steps and columns are states, transpose to [series][steps]
+        const seriesByLabel: number[][] = looksLikeStepsByStates
+          ? labelArray.map((_, colIndex) => Y.map(row => row[colIndex]))
+          : Y;
+
         out.series = {};
-        labelArray.forEach((lab: string, i: number) => { 
-          if (Y[i]) out.series[lab] = Y[i]; 
+        labelArray.forEach((lab: string, i: number) => {
+          if (seriesByLabel[i]) out.series[lab] = seriesByLabel[i];
         });
       } else {
         // 1D array case (single series)
-        const Y: number[] = seriesData;
-        const labelName = Array.isArray(labels) ? labels[0] : String(labels);
+        const Y: number[] = seriesData as number[];
+        const labelName = labelArray[0] ?? "Series";
         out.series = { [labelName]: Y };
       }
     }
@@ -92,11 +107,15 @@ export function materializeArgs(toolName: string, args: any, results: Record<str
   // For plot_bar that uses series_from + labels
   if (toolName === "plot_bar" && args.series_from && args.labels) {
     const seriesData: number[] = resolveRef(args.series_from, results); // shape [n]
-    const labels: string[] = Array.isArray(args.labels) 
-      ? args.labels.map((r: any) => resolveRef(r, results) ?? r)
-      : [resolveRef(args.labels, results) as string];
+    const labelsResolved = resolveRef(args.labels, results);
+    const labels: string[] = Array.isArray(labelsResolved)
+      ? labelsResolved.map((r: any) => (typeof r === "string" ? r : String(r)))
+      : [String(labelsResolved)];
+
     out.series = {};
-    labels.forEach((lab: string, i: number) => { out.series[lab] = [seriesData[i]]; });
+    labels.forEach((lab: string, i: number) => {
+      out.series[lab] = [seriesData?.[i] ?? 0];
+    });
     delete out.series_from;
     delete out.labels;
   }
@@ -141,6 +160,14 @@ export const PlotBarArgs = z.object({
   xlabel: z.string().optional(),
   ylabel: z.string().optional(),
   ref_lines_y: z.union([z.string(), z.array(z.number())]).optional(), // Reference lines at stationary probabilities
+});
+
+// New summarization tool args
+export const SummarizeResultsArgs = z.object({
+  markov: z.any().optional(),
+  ab_test: z.any().optional(),
+  power_curve: z.any().optional(),
+  notes: z.string().optional(),
 });
 
 // Define the Step schema with discriminated unions
@@ -189,6 +216,11 @@ export const Step = z.discriminatedUnion("tool", [
     tool: z.literal("power_curve"),
     args: powerCurveParams,
   }),
+  z.object({
+    id: z.string().optional(),
+    tool: z.literal("summarize_results"),
+    args: SummarizeResultsArgs,
+  }),
 ]);
 
 export const SuccessCriteria = z.object({
@@ -221,3 +253,4 @@ export type Step = z.infer<typeof Step>;
 export type MarkovMcsArgs = z.infer<typeof MarkovMcsArgs>;
 export type PlotLineArgs = z.infer<typeof PlotLineArgs>;
 export type SuccessCriteria = z.infer<typeof SuccessCriteria>;
+export type SummarizeResultsArgs = z.infer<typeof SummarizeResultsArgs>;
