@@ -13,6 +13,7 @@ export default function Home() {
     analysisPlan?: Record<string, any>;
   } | null>(null);
   const [loading, setLoading] = useState(false);
+  const isEmpty = !out;
 
   // Render markdown-like paragraphs while preserving possible data URLs
   const renderText = (text: string) => {
@@ -247,55 +248,55 @@ export default function Home() {
   }
 
   return (
-    <main className="relative px-4 sm:px-6 lg:px-8 py-8 md:py-12 max-w-7xl mx-auto space-y-8">
-      <header className="sticky top-0 z-10 -mx-4 md:-mx-6 px-4 md:px-6 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/40 dark:supports-[backdrop-filter]:bg-black/20 rounded-b-xl border-b border-black/5">
-        <div className="mx-auto max-w-5xl flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div>
-              <h1 className="text-lg md:text-xl font-semibold tracking-tight">Benched</h1>
-              <p className="hidden sm:block text-xs text-zinc-600 dark:text-zinc-400">Clean, modern agentic solver</p>
-            </div>
-          </div>
-          <div className="hidden sm:flex items-center gap-3 text-xs text-zinc-600 dark:text-zinc-400" />
-        </div>
-      </header>
+    <main className="relative px-4 sm:px-6 lg:px-8 py-14 md:py-20 max-w-7xl mx-auto space-y-10">
+      {/* Hero center like GPT landing */}
+      <section className={`${isEmpty ? "min-h-[72vh] grid place-items-center" : ""}`}>
+        <div className="max-w-3xl mx-auto text-center space-y-4">
+        <h1 className="text-3xl md:text-5xl font-semibold tracking-tight">Introducing Benched</h1>
+        <p className="text-base md:text-lg text-zinc-600 dark:text-zinc-300">
+          Our clean, modern agentic solver with rich visuals and built-in evaluation — so you get the best answer, every time.
+        </p>
 
-      <section className="gradient-border rounded-2xl">
-        <div className="glass rounded-[calc(1rem-2px)] p-4 md:p-6">
-          <label htmlFor="prompt" className="sr-only">Prompt</label>
-          <textarea
-            id="prompt"
-            className="w-full border rounded-xl p-3 md:p-4 bg-white text-zinc-900 dark:bg-zinc-900/70 dark:text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-emerald-400/40 focus:border-emerald-300/40 text-[16px]"
-            rows={4}
-            value={q}
-            onChange={e=>setQ(e.target.value)}
-            placeholder="Describe a task, e.g., 'Forecast next month's demand with a 95% CI'"
-            onKeyDown={(e)=>{ if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ run(); } }}
-          />
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button type="button" onClick={()=>setQ('Compute power curve for a two-arm AB test with baseline=0.1, effect=0.02, n in [1000,5000].')}
-              className="text-xs rounded-full border px-2.5 py-1 bg-white/70 hover:bg-white/90 transition">Example: Power curve</button>
-            <button type="button" onClick={()=>setQ('Forecast next 12 months with seasonality, return 95% CI and a line plot.')}
-              className="text-xs rounded-full border px-2.5 py-1 bg-white/70 hover:bg-white/90 transition">Example: Forecast</button>
-            <button type="button" onClick={()=>setQ('Run a Markov chain simulation with 1e4 trials, 1000 steps for T=[[0.9,0.1],[0.2,0.8]].')}
-              className="text-xs rounded-full border px-2.5 py-1 bg-white/70 hover:bg-white/90 transition">Example: Markov</button>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between">
-            <div className="hidden sm:flex gap-2 text-xs text-zinc-600 dark:text-zinc-400">
-              <span className="rounded-md border px-2 py-1 bg-white/80 text-emerald-700 border-emerald-200">Charts</span>
-              <span className="rounded-md border px-2 py-1 bg-white/80 text-cyan-700 border-cyan-200">Artifacts</span>
-              <span className="rounded-md border px-2 py-1 bg-white/80 text-fuchsia-700 border-fuchsia-200">Success Checks</span>
-            </div>
+        {/* Unified input bar */}
+        <div className="mt-6 mx-auto max-w-3xl w-full">
+          <div className="relative flex items-center gap-2 md:gap-3 rounded-full bg-white/95 dark:bg-zinc-900/70 shadow-lg ring-1 ring-black/5 backdrop-blur px-2 md:px-3 h-12 md:h-14">
+            <button
+              type="button"
+              onClick={()=>setQ("")}
+              className="shrink-0 size-8 md:size-9 grid place-items-center rounded-full bg-violet-100/80 dark:bg-violet-900/40 text-violet-700"
+              aria-label="New query"
+            >
+              +
+            </button>
+            <label htmlFor="prompt" className="sr-only">Prompt</label>
+            <textarea
+              id="prompt"
+              rows={1}
+              value={q}
+              onChange={e=>setQ(e.target.value)}
+              onKeyDown={(e)=>{ if((e.metaKey||e.ctrlKey) && e.key==='Enter'){ run(); } }}
+              placeholder="Ask anything, e.g. 'Forecast next month's demand with a 95% CI'"
+              className="min-h-[1.75rem] w-full resize-none bg-transparent outline-none text-[16px] md:text-base placeholder-zinc-500"
+            />
             <button
               onClick={run}
               disabled={loading}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-sm shadow-emerald-500/20 hover:from-emerald-600 hover:via-teal-600 hover:to-cyan-600 disabled:opacity-50"
+              className="shrink-0 inline-flex items-center justify-center h-9 md:h-10 px-4 rounded-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-rose-500 text-white shadow-sm hover:from-violet-600 hover:via-fuchsia-600 hover:to-rose-600 disabled:opacity-50"
             >
               {loading ? "Solving..." : "Run"}
             </button>
           </div>
+
+          {/* Quick examples */}
+          <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+            <button type="button" onClick={()=>setQ('Compute power curve for a two-arm AB test with baseline=0.1, effect=0.02, n in [1000,5000].')}
+              className="text-xs rounded-full border px-2.5 py-1 bg-white/80 hover:bg-white transition">Power curve</button>
+            <button type="button" onClick={()=>setQ('Forecast next 12 months with seasonality, return 95% CI and a line plot.')}
+              className="text-xs rounded-full border px-2.5 py-1 bg-white/80 hover:bg-white transition">Forecast</button>
+            <button type="button" onClick={()=>setQ('Run a Markov chain simulation with 1e4 trials, 1000 steps for T=[[0.9,0.1],[0.2,0.8]].')}
+              className="text-xs rounded-full border px-2.5 py-1 bg-white/80 hover:bg-white transition">Markov</button>
+          </div>
+        </div>
         </div>
       </section>
 
@@ -303,10 +304,12 @@ export default function Home() {
 
       {renderSuccessEvaluation()}
 
-      <div className="relative">
-        <div className="absolute -inset-x-8 -top-10 -z-10 h-24 bg-gradient-to-r from-emerald-400/40 via-cyan-400/30 to-fuchsia-400/40 blur-2xl" />
-        {renderToolResults()}
-      </div>
+      {out?.toolResults && (out.toolResults as any[]).length > 0 && (
+        <div className="relative mt-8">
+          <div className="absolute -inset-x-8 -top-10 -z-10 h-24 bg-gradient-to-r from-violet-400/30 via-fuchsia-400/25 to-rose-400/30 blur-2xl" />
+          {renderToolResults()}
+        </div>
+      )}
     </main>
   );
 }

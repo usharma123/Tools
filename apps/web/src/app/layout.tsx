@@ -37,7 +37,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="scroll-smooth">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-gradient-to-br from-slate-50 via-white to-emerald-50 dark:from-zinc-950 dark:via-zinc-900 dark:to-emerald-950`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased min-h-screen bg-gradient-to-br from-violet-50 via-fuchsia-50 to-rose-50 dark:from-zinc-950 dark:via-violet-950 dark:to-fuchsia-950`}
         suppressHydrationWarning={true}
       >
         {/* Background aurora */}

@@ -1,6 +1,6 @@
-# Problem Solver MVP
+# Benched – Agentic Solver
 
-A sophisticated AI-powered analysis system that combines statistical analysis tools (Markov chain Monte Carlo simulations and A/B testing power analysis) with interactive HTML visualizations. The system uses a FastAPI backend (powered by Uvicorn) for computational tools and a Next.js frontend for user interaction.
+Benched is a clean, modern agentic analysis system that combines a FastAPI worker for statistical tools and a Next.js UI. It features a redesigned gradient UI, a centered hero with an integrated input pill, machine-checkable success criteria, and rich artifacts (plots/HTML) returned by tools.
 
 ## Architecture
 
@@ -28,25 +28,26 @@ Tools/
 ### 1. Install Dependencies
 
 ```bash
-# Install Python dependencies for the worker
+# Python worker
 cd apps/worker
-pip install fastapi uvicorn numpy matplotlib scipy
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-# Install Node.js dependencies for the web app
+# Web app
 cd ../web
-npm install
+pnpm install
 ```
 
 ### 2. Start the Services
 
 ```bash
-# Terminal 1: Start the FastAPI worker with Uvicorn
-cd apps/worker
-uvicorn main:app --reload
+# Terminal 1: FastAPI worker
+cd apps/worker && source .venv/bin/activate
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
-# Terminal 2: Start the Next.js frontend
-cd ../web
-npm run dev
+# Terminal 2: Next.js frontend
+cd apps/web
+pnpm dev
 ```
 
 ### 3. Access the Application
@@ -400,6 +401,26 @@ The AI can generate custom analysis plans for complex problems:
 - ✅ **Real-time Processing**: Immediate results with progress feedback.
 - ✅ **Extensible Architecture**: Easy to add new tools and capabilities.
 - ✅ **Professional UI**: Clean, responsive web interface.
+
+## What Changed Recently
+- New branding: title updated to "Benched".
+- Gradient system: continuous purple-based background with aurora animation and noise to eliminate banding.
+- Centered hero with pill-shaped input and integrated Run button; example chips.
+- Mobile zoom fixes via viewport and input font sizes; smooth scrolling.
+- Conditional section gradients to avoid artifacts before results.
+- ESLint configuration relaxed for `any` usage warnings to keep builds green.
+
+## Setup Notes
+- Worker artifacts are served at `/artifacts`. The web app references `http://localhost:8000` for iframes.
+- If you add tools that output images/HTML, return an `artifact_url` or `image_base64` for automatic rendering in the UI.
+
+## Roadmap / Future Work
+- Quantized Human Behavior: discrete-choice and habit/recency effects; calibration from sessions; parameter priors and Bayesian updates.
+- Document Ingestion & Analysis: upload PDFs/CSVs/URLs, chunking, embeddings, metadata extraction; tool to summarize and cross-reference with analysis results.
+- Report Generation: compose results, charts, and success checks into a templated HTML/PDF report with shareable links.
+- Upstream Query Abstraction Layer: structured intent parser that maps user queries to a typed AnalysisPlan using Zod schemas, validating steps and success_criteria.
+- More Tools: regression, causal inference (DID/IV), time-series forecasting (SARIMAX/Prophet), and experiment diagnostics.
+- UI: theme toggle, Next Image for artifacts, and richer result cards.
 
 ## Future Enhancements
 
