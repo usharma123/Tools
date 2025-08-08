@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
@@ -13,6 +13,7 @@ import json
 import math
 import time
 from scipy import stats
+from scipy.optimize import minimize
 from textwrap import shorten
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -616,6 +617,7 @@ class SummarizeInputs(BaseModel):
     ab_test: Optional[Dict[str, Any]] = None
     power_curve: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
+    forecast: Optional[Dict[str, Any]] = None
 
 @app.post("/tools/summarize_results")
 def summarize_results(args: SummarizeInputs) -> Dict[str, Any]:
@@ -679,6 +681,39 @@ def summarize_results(args: SummarizeInputs) -> Dict[str, Any]:
                 )
 
     if args.power_curve:
+        pc = args.power_curve
+        if pc.get("mode") == "mde_vs_n":
+            grid = pc.get("mde_rel_grid", [])
+            nA = pc.get("n_per_arm_A", [])
+            if grid and nA:
+                alpha = pc.get("alpha", 0.05)
+                power = pc.get("power", 0.8)
+                paragraphs.append(
+                    f"Power planning: with α={alpha} and target power≈{power}, to detect {grid[0]*100:.1f}% relative lift you need roughly n≈{int(nA[0])} per arm; for {grid[-1]*100:.1f}% lift, about n≈{int(nA[-1])}. Smaller detectable lifts require much larger samples, so pick the MDE that aligns with business impact and feasibility."
+                )
+        if pc.get("mode") == "power_vs_n":
+            ngrid = pc.get("n_grid", [])
+            power = pc.get("power", [])
+            if ngrid and power:
+                paragraphs.append(
+                    f"Power growth with sample size: at n={int(ngrid[0])} per arm, power≈{power[0]:.2f}; at n={int(ngrid[-1])}, power≈{power[-1]:.2f}. This curve helps choose a sample size that achieves at least 0.8 power without over-spending traffic."
+                )
+
+    if args.forecast:
+        fc = args.forecast
+        aic = fc.get("aic")
+        order = fc.get("model_order")
+        seas = fc.get("seasonal_order")
+        if aic is not None and order is not None:
+            paragraphs.append(
+                f"Forecast model: ARIMA{tuple(order)}{('x' + str(tuple(seas)) if seas is not None else '')} with AIC={float(aic):.2f}. This indicates the fit is selected with a standard information criterion rather than arbitrary choices."
+            )
+    # Forecast summary (if present in future calls)
+    try:
+        # If a forecast tool result was passed in notes or future extension, just support keys inline
+        pass
+    except Exception:
+        pass
         pc = args.power_curve
         if pc.get("mode") == "mde_vs_n":
             grid = pc.get("mde_rel_grid", [])
@@ -1654,6 +1689,9 @@ class ARIMAArgs(BaseModel):
     horizon: int = Field(..., gt=0)
     seasonal_period: Optional[int] = None
     alpha: float = Field(0.05, ge=0, le=0.2)
+    backtest_k: Optional[int] = Field(default=None, gt=0)
+    start_date: Optional[str] = None  # ISO-like string, e.g., '2023-01-01'
+    freq: Optional[str] = None        # Pandas freq alias, e.g., 'D', 'W', 'M'
 
 @app.post("/tools/forecast_arima")
 def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
@@ -1663,6 +1701,15 @@ def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
     import numpy as np
 
     y = pd.Series(args.ts)
+    index_is_datetime = False
+    try:
+        if args.start_date and args.freq:
+            dt_index = pd.date_range(start=args.start_date, periods=len(y), freq=args.freq)
+            y.index = dt_index
+            index_is_datetime = True
+    except Exception:
+        # fallback silently to integer index
+        index_is_datetime = False
     order = (1, 1, 1)
     seasonal_order = (0, 0, 0, 0)
     if args.seasonal_period:
@@ -1684,24 +1731,52 @@ def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
 
     # plot
     fig, ax = plt.subplots()
-    ax.plot(y.index, y, label="Historical")
-    f_idx = np.arange(len(y), len(y) + args.horizon)
-    ax.plot(f_idx, y_hat, label="Forecast")
-    ax.fill_between(
-        f_idx,
-        ci_low,
-        ci_high,
-        color="orange",
-        alpha=0.2,
-        label=f"{int((1-args.alpha)*100)}% CI",
-    )
+    # Build forecast x-axis
+    if index_is_datetime:
+        try:
+            offset = pd.tseries.frequencies.to_offset(args.freq) if args.freq else None
+        except Exception:
+            offset = None
+        if offset is not None:
+            f_start = y.index[-1] + offset
+            f_idx = pd.date_range(start=f_start, periods=args.horizon, freq=args.freq)
+        else:
+            f_idx = np.arange(len(y), len(y) + args.horizon)
+        ax.plot(y.index, y, label="Historical")
+        ax.plot(f_idx, y_hat, label="Forecast")
+        ax.fill_between(
+            f_idx,
+            ci_low,
+            ci_high,
+            color="orange",
+            alpha=0.2,
+            label=f"{int((1-args.alpha)*100)}% CI",
+        )
+        try:
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=2, maxticks=6))
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+            fig.autofmt_xdate(rotation=30, ha='right')
+        except Exception:
+            pass
+    else:
+        ax.plot(y.index, y, label="Historical")
+        f_idx = np.arange(len(y), len(y) + args.horizon)
+        ax.plot(f_idx, y_hat, label="Forecast")
+        ax.fill_between(
+            f_idx,
+            ci_low,
+            ci_high,
+            color="orange",
+            alpha=0.2,
+            label=f"{int((1-args.alpha)*100)}% CI",
+        )
     ax.set_title("ARIMA forecast")
     ax.set_xlabel("Index")
     ax.set_ylabel("Value")
     ax.legend(loc="best")
     img = _fig_to_data_url(fig)
 
-    return {
+    out = {
         "tool_version": "forecast_arima/0.1.0",
         "model_order": order,
         "seasonal_order": seasonal_order,
@@ -1709,6 +1784,354 @@ def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
         "forecast": y_hat,
         "ci_low": ci_low,
         "ci_high": ci_high,
+        "horizon": int(args.horizon),
         "artifact_url": img,
         "runtime_ms": (time.perf_counter() - t0) * 1000,
+    }
+
+    # Optional simple backtest using the last k points
+    try:
+        if args.backtest_k is not None and args.backtest_k > 0 and args.backtest_k < len(y):
+            k = int(args.backtest_k)
+            y_train = y.iloc[:-k]
+            y_test = y.iloc[-k:]
+
+            bt_model = SARIMAX(
+                y_train,
+                order=order,
+                seasonal_order=seasonal_order,
+                enforce_stationarity=False,
+                enforce_invertibility=False,
+            )
+            bt_res = bt_model.fit(disp=False)
+            bt_pred = bt_res.get_forecast(steps=k)
+            y_hat_k = bt_pred.predicted_mean.values
+
+            # naive baseline: last observed value from training, repeated k times
+            naive_last = float(y_train.iloc[-1])
+            naive_fc = np.full(k, naive_last)
+
+            # sMAPE helper
+            def smape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+                y_true = np.asarray(y_true, dtype=float)
+                y_pred = np.asarray(y_pred, dtype=float)
+                denom = np.abs(y_true) + np.abs(y_pred)
+                # avoid division by zero; where denom==0, contribution is 0
+                mask = denom > 0
+                if not np.any(mask):
+                    return 0.0
+                return float(100.0 * np.mean(np.abs(y_pred[mask] - y_true[mask]) / denom[mask]))
+
+            smape_model = smape(y_test.values, y_hat_k)
+            smape_naive = smape(y_test.values, naive_fc)
+            out["backtest"] = {
+                "k": k,
+                "smape": smape_model,
+                "naive_smape": smape_naive,
+                "improvement": float(smape_naive - smape_model),
+            }
+    except Exception:
+        # backtest is optional; ignore failures
+        pass
+
+    # attach index arrays for client plotting
+    try:
+        if index_is_datetime:
+            hist_idx = [str(ts.to_pydatetime().date()) if hasattr(ts, 'to_pydatetime') else str(ts) for ts in y.index]
+            # f_idx defined above in both branches
+            fc_idx = [str(ts.to_pydatetime().date()) if hasattr(ts, 'to_pydatetime') else str(ts) for ts in f_idx]
+        else:
+            hist_idx = list(range(len(y)))
+            fc_idx = list(range(len(y), len(y) + args.horizon))
+        out["history_index"] = hist_idx
+        out["forecast_index"] = fc_idx
+        out["index_is_datetime"] = index_is_datetime
+    except Exception:
+        pass
+
+    return out
+
+# --------------------------
+# Conditional Logit (Choice)
+# --------------------------
+
+class AdjustmentSpec(BaseModel):
+    mode: str = "add"  # 'add' or 'mul'
+    value: float
+
+
+class Scenario(BaseModel):
+    name: str
+    scope_alts: Optional[List[str]] = None   # which alt_id to adjust; None = all
+    # feature -> additive number OR {mode: 'add'|'mul', value: number}
+    adjustments: Dict[str, Union[float, AdjustmentSpec, Dict[str, Any]]]
+
+class ChoiceLogitArgs(BaseModel):
+    # Data: long-form CSV where each row is one (choice_id, alt_id)
+    csv: str                                 # CSV text or a path
+    choice_col: str = "choice_id"
+    alt_col: str = "alt_id"
+    chosen_col: str = "chosen"               # 0/1, must sum to 1 per choice_id
+    feature_cols: List[str]                  # columns used in utility
+    standardize: bool = False                # keep False for interpretability
+    add_alt_dummies: bool = False            # include alt fixed-effects (minus base)
+    base_alt: Optional[str] = None           # base for dummies; if None uses first
+    scenarios: Optional[List[Scenario]] = None
+    l2_lambda: float = 1e-2                  # L2 regularization strength
+
+@app.post("/tools/choice_logit")
+def choice_logit(args: ChoiceLogitArgs) -> Dict[str, Any]:
+    import pandas as pd
+    t0 = time.perf_counter()
+    # 1) Load
+    if "\n" in args.csv:
+        df = pd.read_csv(StringIO(args.csv))
+    else:
+        df = pd.read_csv(args.csv)
+
+    # Basic checks
+    for col in [args.choice_col, args.alt_col, args.chosen_col, *args.feature_cols]:
+        assert col in df.columns, f"Missing column: {col}"
+
+    # Ensure one choice per choice set
+    grp = df.groupby(args.choice_col)[args.chosen_col].sum()
+    if not np.all(grp.values == 1):
+        raise ValueError("Each choice_id must have exactly one chosen=1 row.")
+
+    # 2) Sort consistently and build design matrix on sorted frame
+    df = df.sort_values([args.choice_col, args.alt_col]).reset_index(drop=True)
+    df[args.alt_col] = df[args.alt_col].astype(str)
+    alts = df[args.alt_col].unique().tolist()
+    choice_ids = df[args.choice_col].astype(str).unique().tolist()
+
+    X = df[args.feature_cols].to_numpy(dtype=float)  # (N,K)
+    y = df[args.chosen_col].to_numpy(dtype=int)      # (N,)
+    N, K = X.shape
+
+    # Optional: alt dummies (minus base)
+    alt_dummies = None
+    dummy_names: List[str] = []
+    if args.add_alt_dummies:
+        base = args.base_alt or alts[0]
+        d = pd.get_dummies(df[args.alt_col], drop_first=False)
+        if base not in d.columns:
+            base = d.columns[0]
+        d.drop(columns=[base], inplace=True)  # base alt absorbed
+        alt_dummies = d.to_numpy(dtype=float)
+        dummy_names = [f"alt[{c}]" for c in d.columns]
+        # Stack to features
+        X = np.column_stack([X, alt_dummies])
+        K = X.shape[1]
+
+    # Standardize if requested (note: coefficients are on standardized scale)
+    means = X.mean(0) if args.standardize else np.zeros(K)
+    stds = X.std(0) if args.standardize else np.ones(K)
+    stds[stds == 0] = 1.0
+    Xs = (X - means) / stds
+
+    # Group pointers for softmax denominators
+    # Build index slices for each choice set (on sorted df)
+    # compute group ranges
+    groups: List[tuple[int,int]] = []
+    start_idx = 0
+    for _, g in df.groupby(args.choice_col, sort=False):
+        n = len(g)
+        groups.append((start_idx, start_idx + n))
+        start_idx += n
+
+    # 3) Log-likelihood & gradient
+    def nll_grad(beta: np.ndarray):
+        beta = beta.reshape(-1, 1)           # (K,1)
+        ll = 0.0
+        grad = np.zeros((K, 1))
+        for (a, b) in groups:
+            Xg = Xs[a:b]                    # (m,K)
+            yg = y[a:b].reshape(-1, 1)       # (m,1)
+            v = Xg @ beta                   # (m,1)
+            v = v - v.max()                 # stabilize
+            expv = np.exp(v)
+            denom = expv.sum()
+            p = expv / denom                # (m,1)
+            # ll
+            ll += (yg * (v - np.log(denom))).sum()
+            # grad
+            diff = yg - p                   # (m,1)
+            grad += Xg.T @ diff             # (K,1)
+        # L2 regularization (ridge)
+        if args.l2_lambda and args.l2_lambda > 0:
+            ll = ll - 0.5 * args.l2_lambda * float((beta * beta).sum())
+            grad = grad - args.l2_lambda * beta
+        return -ll.item(), -grad.ravel()
+
+    # Init & optimize
+    beta0 = np.zeros(K)
+    res = minimize(lambda b: nll_grad(b)[0],
+                   beta0, jac=lambda b: nll_grad(b)[1],
+                   method="L-BFGS-B", options={"maxiter": 1000})
+    beta_hat = res.x
+
+    # Fisher information (sum over groups X' (Diag(p)-pp') X ) for SEs
+    def fisher(beta: np.ndarray):
+        beta = beta.reshape(-1, 1)
+        H = np.zeros((K, K))
+        for (a, b) in groups:
+            Xg = Xs[a:b]
+            v = Xg @ beta
+            v = v - v.max()
+            expv = np.exp(v)
+            p = (expv / expv.sum()).ravel()           # (m,)
+            W = np.diag(p) - np.outer(p, p)           # (m,m)
+            H += Xg.T @ W @ Xg
+        # Add ridge to stabilize inversion
+        if args.l2_lambda and args.l2_lambda > 0:
+            H = H + args.l2_lambda * np.eye(K)
+        return H
+
+    H = fisher(beta_hat)
+    try:
+        cov = np.linalg.pinv(H)  # pseudo-inverse for numerical stability
+        se = np.sqrt(np.diag(cov))
+    except Exception:
+        cov = None
+        se = np.full(K, np.nan)
+
+    z = beta_hat / se
+    pvals = 2 * (1 - stats.norm.cdf(np.abs(z)))
+
+    # McFadden pseudo-R2
+    def loglike_at(beta: np.ndarray):
+        ll = 0.0
+        beta = beta.reshape(-1, 1)
+        for (a, b) in groups:
+            Xg = Xs[a:b]; yg = y[a:b].reshape(-1, 1)
+            v = Xg @ beta
+            v = v - v.max()
+            expv = np.exp(v); denom = expv.sum()
+            p = expv / denom
+            ll += (yg * (v - np.log(denom))).sum()
+        return ll.item()
+
+    ll_full = loglike_at(beta_hat)
+    # Null model: zero betas
+    ll_null = loglike_at(np.zeros(K))
+    pseudo_r2 = 1 - (ll_full / ll_null) if ll_null != 0 else None
+
+    # 4) Baseline predicted shares by alt (averaged across choice sets)
+    def predict_probs(Xs_scaled: np.ndarray):
+        probs = np.zeros(len(Xs_scaled))
+        shares_by_alt: Dict[str, float] = {a: 0.0 for a in alts}
+        for (a, b) in groups:
+            Xg = Xs_scaled[a:b]
+            v = Xg @ beta_hat.reshape(-1, 1); v = v - v.max()
+            p = (np.exp(v) / np.exp(v).sum()).ravel()
+            probs[a:b] = p
+            # aggregate by alt
+            alts_g = df.iloc[a:b][args.alt_col].tolist()
+            for alt, pr in zip(alts_g, p):
+                shares_by_alt[alt] += float(pr)
+        # average share per choice set
+        for k in shares_by_alt:
+            shares_by_alt[k] /= len(groups)
+        return probs, shares_by_alt
+
+    baseline_probs, baseline_shares = predict_probs(Xs)
+
+    # Diagnostics: max softmax probability across all choice sets
+    max_group_prob = 0.0
+    for (a, b) in groups:
+        gp = float(np.max(baseline_probs[a:b]))
+        if gp > max_group_prob:
+            max_group_prob = gp
+
+    # Fisher/Hessian condition number
+    try:
+        fisher_cond = float(np.linalg.cond(H))
+    except Exception:
+        fisher_cond = float('inf')
+
+    # Separation/overfit warning
+    separation_warning = bool((max_group_prob > 0.995) or (pseudo_r2 is not None and pseudo_r2 > 0.95))
+
+    # 5) Scenario simulation(s)
+    scenarios_out: List[Dict[str, Any]] = []
+    if args.scenarios:
+        for s in args.scenarios:
+            X_mod = X.copy()
+            scope = set([str(a) for a in (s.scope_alts or alts)])
+            mask = df[args.alt_col].isin(scope).values
+            for feat, adj in s.adjustments.items():
+                idx = args.feature_cols.index(feat) if feat in args.feature_cols else None
+                if idx is None and args.add_alt_dummies:
+                    # skip alt dummies adjustments; adjust only real features
+                    continue
+                if idx is not None:
+                    mode = "add"
+                    val: float = 0.0
+                    if isinstance(adj, (int, float)):
+                        mode = "add"; val = float(adj)
+                    elif isinstance(adj, dict):
+                        mode = str(adj.get("mode", "add"))
+                        val = float(adj.get("value", 0.0))
+                    elif isinstance(adj, AdjustmentSpec):
+                        mode = str(adj.mode); val = float(adj.value)
+                    if mode == "mul":
+                        X_mod[mask, idx] = X_mod[mask, idx] * val
+                    else:
+                        X_mod[mask, idx] = X_mod[mask, idx] + val
+            # re-standardize with SAME means/stds used in fit
+            if alt_dummies is not None:
+                X_mods = np.column_stack([X_mod, alt_dummies])
+            else:
+                X_mods = X_mod
+            X_mods = (X_mods - means) / stds
+            _, shares = predict_probs(X_mods)
+            deltas = {a: shares[a] - baseline_shares[a] for a in alts}
+            scenarios_out.append({
+                "name": s.name,
+                "shares": [shares[a] for a in alts],
+                "deltas": [deltas[a] for a in alts]
+            })
+
+    # 6) Simple bar plot (baseline shares)
+    fig, ax = plt.subplots()
+    ax.bar(alts, [baseline_shares[a] for a in alts])
+    ax.set_title("Predicted shares (baseline)")
+    ax.set_ylabel("Share")
+    img_url = _fig_to_data_url(fig)
+
+    # Labels for coefficients
+    feat_names = args.feature_cols + dummy_names
+    coef = [{"name": n, "beta": float(b), "se": float(s), "z": float(zz), "p_value": float(pp), "odds_ratio": float(math.exp(float(b)))}
+            for n, b, s, zz, pp in zip(feat_names, beta_hat, se, z, pvals)]
+
+    # Coefficient signs for simple direction checks
+    coef_signs = {n: (1 if float(b) > 0 else (-1 if float(b) < 0 else 0)) for n, b in zip(feat_names, beta_hat)}
+
+    # Heuristic warnings for small datasets / missing alt FE
+    warnings_list: List[str] = []
+    if len(groups) < 50:
+        warnings_list.append(f"Low number of choice sets (n_groups={len(groups)}). Aim for ≥ 50–100 choice sets for demos.")
+    if not args.add_alt_dummies and len(alts) > 2:
+        warnings_list.append("Consider add_alt_dummies=true to capture unobserved alternative quality.")
+
+    return {
+        "tool_version": "choice_logit/0.2.0",
+        "converged": bool(res.success),
+        "n_iter": int(getattr(res, 'nit', 0)),
+        "loglike": ll_full,
+        "loglike_null": ll_null,
+        "pseudo_r2": pseudo_r2,
+        "l2_lambda": float(args.l2_lambda),
+        "n_groups": int(len(groups)),
+        "max_group_prob": float(max_group_prob),
+        "fisher_cond": fisher_cond,
+        "separation_warning": separation_warning,
+        "coefficients": coef,
+        "coef_signs": coef_signs,
+        "alts": alts,
+        "baseline_shares": [baseline_shares[a] for a in alts],
+        "scenarios": scenarios_out,
+        "warnings": warnings_list,
+        "artifact_url": img_url,
+        "runtime_ms": (time.perf_counter() - t0) * 1000.0
     }

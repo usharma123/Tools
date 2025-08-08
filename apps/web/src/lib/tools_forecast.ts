@@ -5,7 +5,10 @@ export const arimaParams = z.object({
   ts: z.array(z.number()).min(3),
   horizon: z.number().int().positive(),
   seasonal_period: z.number().int().positive().optional(),
-  alpha: z.number().min(0).max(0.2).optional()
+  alpha: z.number().min(0).max(0.2).optional(),
+  backtest_k: z.number().int().positive().optional()
+  , start_date: z.string().optional()
+  , freq: z.string().optional()
 });
 
 export async function forecast_arima(args: unknown){

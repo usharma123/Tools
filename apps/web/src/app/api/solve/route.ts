@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
+import { choice_logit, choiceLogitPlanParams } from "@/lib/tools_choice";
 import { forecast_arima as forecast_arima_adapter } from "@/lib/tools_forecast";
 import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve, abTestParams as abTestParamsA, barWithCIParams as barWithCIParamsA, powerCurveParams } from "@/lib/tools_ab_power";
 import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B, abTestParams as abTestParamsB, barCIParams as barCIParamsB } from "@/lib/tools_stats";
@@ -25,6 +26,7 @@ IMPORTANT: Choose tools based on the analysis context:
 - Use power_curve for sample size planning, power analysis, MDE calculations (NO seed parameter)
  - Use plot_* tools for visualization of results
  - Use causal_impact for diff-in-diff causal analysis on panel data (treated vs control over time)
+ - Use forecast_arima for time series forecasting; if you have date context, pass start_date and freq so the worker returns real indices. For plotting, prefer x_from: "$forecast_arima.history_index" (history) and "$forecast_arima.forecast_index" (forecast).
 
 Available tools:
 - markov_mcs: Run Monte Carlo on a Markov chain. Parameters: transition (array of arrays), steps (number), trials (number), metric (stationary/avg_reward/trajectory), track_trajectory (boolean)
@@ -167,11 +169,12 @@ For Markov Chain Analysis:
 IMPORTANT: 
 - Output ONLY the AnalysisPlan JSON, no other text.
 - Use proper schema validation for all tool arguments.
-- ALWAYS include a numeric seed for reproducibility (e.g., "seed": 12345).
-- ALWAYS include machine-checkable success criteria with numeric thresholds:
-  * tv_distance_max: 0.02 — total-variation distance between final share and stationary estimate
-  * ci_width_max: 0.02 — 95% CI half-width per state
-  * min_trials: 10000 — align with your args
+- ALWAYS include a numeric seed for reproducibility (e.g., "seed": 12345) when the tool supports stochasticity.
+- Success criteria must be machine-checkable and context-appropriate. For forecasting, prefer:
+  * len($fc.forecast) == horizon
+  * len($fc.ci_low) == horizon && len($fc.ci_high) == horizon
+  * all($fc.ci_low[i] <= $fc.forecast[i] <= $fc.ci_high[i])
+  * Optional: backtest sMAPE on the last k historical points and require it to beat a naive baseline.
 - For convergence plots, use cumulative shares (fractions) instead of counts:
   * series_from: "$markov_mcs.trajectory_data.cum_share" 
   * ylabel: "Cumulative share"
@@ -204,6 +207,21 @@ async function executeTool(toolName: string, params: unknown) {
       return await causal_impact(params);
     } else if (toolName === "forecast_arima") {
       return await forecast_arima_adapter(params);
+    } else if (toolName === "choice_logit") {
+      // Accept either numbers or strings in plan; coerce safely
+      const p = params as any;
+      const normalized = {
+        ...p,
+        scenarios: Array.isArray(p?.scenarios)
+          ? p.scenarios.map((s: any) => ({
+              ...s,
+              adjustments: Object.fromEntries(
+                Object.entries(s?.adjustments ?? {}).map(([k, v]) => [k, typeof v === 'string' ? Number(v) : v])
+              )
+            }))
+          : undefined
+      };
+      return await choice_logit(normalized);
     } else {
       throw new Error(`Unknown tool: ${toolName}`);
     }
@@ -258,15 +276,15 @@ function strictlyIncreasing(arr: number[], eps = 1e-9) {
 
 function evaluateSuccessCriteria(
   criteria: SuccessCriteria, 
-  markovResult: Record<string, unknown>
+  toolResult: Record<string, unknown>
 ): { passed: boolean; details: Record<string, unknown>; decision: string } {
   const details: Record<string, unknown> = {};
   const pass: Record<string, boolean> = {};
   let passed = true;
 
   // Check minimum trials if specified
-  if (criteria.min_trials !== undefined && 'trials' in markovResult) {
-    const trials = markovResult.trials as number;
+  if (criteria.min_trials !== undefined && 'trials' in toolResult) {
+    const trials = toolResult.trials as number;
     details.trials = trials;
     pass.min_trials = trials >= criteria.min_trials;
     passed = passed && pass.min_trials;
@@ -275,16 +293,16 @@ function evaluateSuccessCriteria(
   // Check CI width if specified - handle both stationary and trajectory results
   if (criteria.ci_width_max !== undefined) {
     let maxCiWidth = 0;
-    if ('max_ci_width' in markovResult) {
+    if ('max_ci_width' in toolResult) {
       // Stationary result
-      maxCiWidth = markovResult.max_ci_width as number;
-    } else if ('final_max_ci_width' in markovResult) {
+      maxCiWidth = toolResult.max_ci_width as number;
+    } else if ('final_max_ci_width' in toolResult) {
       // Trajectory result
-      maxCiWidth = markovResult.final_max_ci_width as number;
-    } else if ('stationary_ci_high' in markovResult && 'stationary_ci_low' in markovResult) {
+      maxCiWidth = toolResult.final_max_ci_width as number;
+    } else if ('stationary_ci_high' in toolResult && 'stationary_ci_low' in toolResult) {
       // Fallback: calculate from CI arrays
-      const ciHigh = markovResult.stationary_ci_high as number[];
-      const ciLow = markovResult.stationary_ci_low as number[];
+      const ciHigh = toolResult.stationary_ci_high as number[];
+      const ciLow = toolResult.stationary_ci_low as number[];
       maxCiWidth = Math.max(...ciHigh.map((high, i) => high - ciLow[i]));
     }
     details.ci_width = maxCiWidth;
@@ -299,28 +317,28 @@ function evaluateSuccessCriteria(
     let piTarget: number[] = [];
     
     // Get final distribution and target
-    if ('stationary_estimate' in markovResult && 'pi_target' in markovResult) {
+    if ('stationary_estimate' in toolResult && 'pi_target' in toolResult) {
       // Stationary result
-      pFinal = markovResult.stationary_estimate as number[];
-      piTarget = markovResult.pi_target as number[];
-    } else if ('final_cum_share' in markovResult && 'final_pi_target' in markovResult) {
+      pFinal = toolResult.stationary_estimate as number[];
+      piTarget = toolResult.pi_target as number[];
+    } else if ('final_cum_share' in toolResult && 'final_pi_target' in toolResult) {
       // Trajectory result
-      pFinal = markovResult.final_cum_share as number[];
-      piTarget = markovResult.final_pi_target as number[];
-    } else if ('final_cum_share' in markovResult && 'pi_target' in markovResult) {
+      pFinal = toolResult.final_cum_share as number[];
+      piTarget = toolResult.final_pi_target as number[];
+    } else if ('final_cum_share' in toolResult && 'pi_target' in toolResult) {
       // Trajectory result with pi_target from stationary computation
-      pFinal = markovResult.final_cum_share as number[];
-      piTarget = markovResult.pi_target as number[];
+      pFinal = toolResult.final_cum_share as number[];
+      piTarget = toolResult.pi_target as number[];
     }
     
     if (pFinal.length > 0 && piTarget.length > 0) {
       computedTvDistance = tvDistance(pFinal, piTarget);
     } else {
       // Fallback to worker's computation if data not available
-      if ('tv_distance' in markovResult) {
-        computedTvDistance = markovResult.tv_distance as number;
-      } else if ('final_tv_distance' in markovResult) {
-        computedTvDistance = markovResult.final_tv_distance as number;
+      if ('tv_distance' in toolResult) {
+        computedTvDistance = toolResult.tv_distance as number;
+      } else if ('final_tv_distance' in toolResult) {
+        computedTvDistance = toolResult.final_tv_distance as number;
       }
     }
     
@@ -329,8 +347,8 @@ function evaluateSuccessCriteria(
     passed = passed && pass.tv;
     
     // Check stability if available
-    if ('stability_check' in markovResult) {
-      const stability = markovResult.stability_check as Record<string, unknown>;
+    if ('stability_check' in toolResult) {
+      const stability = toolResult.stability_check as Record<string, unknown>;
       if ('median_tv' in stability) {
         const medianTv = stability.median_tv as number;
         details.median_tv = medianTv;
@@ -341,8 +359,8 @@ function evaluateSuccessCriteria(
   }
 
   // Check convergence threshold if specified
-  if (criteria.convergence_threshold !== undefined && 'stationary_estimate' in markovResult) {
-    const stationary = markovResult.stationary_estimate as number[];
+  if (criteria.convergence_threshold !== undefined && 'stationary_estimate' in toolResult) {
+    const stationary = toolResult.stationary_estimate as number[];
     const maxProb = Math.max(...stationary);
     details.max_probability = maxProb;
     pass.convergence = maxProb > criteria.convergence_threshold;
@@ -350,8 +368,8 @@ function evaluateSuccessCriteria(
   }
 
   // Check standard deviation if specified
-  if (criteria.max_std_dev !== undefined && 'stationary_estimate' in markovResult) {
-    const stationary = markovResult.stationary_estimate as number[];
+  if (criteria.max_std_dev !== undefined && 'stationary_estimate' in toolResult) {
+    const stationary = toolResult.stationary_estimate as number[];
     const mean = stationary.reduce((a, b) => a + b, 0) / stationary.length;
     const variance = stationary.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / stationary.length;
     const stdDev = Math.sqrt(variance);
@@ -361,9 +379,9 @@ function evaluateSuccessCriteria(
   }
 
   // Check MDE monotonicity for power curve results
-  if (criteria.mde_monotonicity && 'n_per_arm_A' in markovResult && 'mde_rel_grid' in markovResult) {
-    const nPerArm = markovResult.n_per_arm_A as number[];
-    const mdeGrid = markovResult.mde_rel_grid as number[];
+  if (criteria.mde_monotonicity && 'n_per_arm_A' in toolResult && 'mde_rel_grid' in toolResult) {
+    const nPerArm = toolResult.n_per_arm_A as number[];
+    const mdeGrid = toolResult.mde_rel_grid as number[];
     
     if (nPerArm.length > 1 && mdeGrid.length > 1) {
       const isMonotonic = strictlyDecreasing(nPerArm);
@@ -374,9 +392,61 @@ function evaluateSuccessCriteria(
   }
 
   // Check power monotonicity for power curve results
-  if (criteria.power_monotonicity && 'power' in markovResult && 'n_grid' in markovResult) {
-    const power = markovResult.power as number[];
-    const nGrid = markovResult.n_grid as number[];
+  if (criteria.power_monotonicity && 'power' in toolResult && 'n_grid' in toolResult) {
+    const power = toolResult.power as number[];
+    const nGrid = toolResult.n_grid as number[];
+  // Forecast-specific checks
+  if (criteria.forecast_require_lengths_match_horizon) {
+    if ('forecast' in toolResult && 'ci_low' in toolResult && 'ci_high' in toolResult && 'horizon' in toolResult) {
+      const fc = toolResult.forecast as unknown[];
+      const lo = toolResult.ci_low as unknown[];
+      const hi = toolResult.ci_high as unknown[];
+      const horizon = toolResult.horizon as number;
+      const ok = fc.length === horizon && lo.length === horizon && hi.length === horizon;
+      details.forecast_lengths_match_horizon = ok;
+      pass.forecast_lengths = ok;
+      passed = passed && ok;
+    }
+  }
+  if (criteria.forecast_require_forecast_within_ci) {
+    if ('forecast' in toolResult && 'ci_low' in toolResult && 'ci_high' in toolResult) {
+      const fc = toolResult.forecast as number[];
+      const lo = toolResult.ci_low as number[];
+      const hi = toolResult.ci_high as number[];
+      const ok = fc.every((v, i) => (lo?.[i] ?? -Infinity) <= v && v <= (hi?.[i] ?? Infinity));
+      details.forecast_within_ci = ok;
+      pass.forecast_within_ci = ok;
+      passed = passed && ok;
+    }
+  }
+  if (criteria.forecast_backtest_require_better_than_naive || criteria.forecast_backtest_smape_max !== undefined || criteria.forecast_backtest_improvement_min !== undefined) {
+    if ('backtest' in toolResult && typeof toolResult.backtest === 'object') {
+      const bt = toolResult.backtest as Record<string, unknown>;
+      const smape = bt.smape as number | undefined;
+      const naiveSmape = bt.naive_smape as number | undefined;
+      if (smape !== undefined) {
+        details.backtest_smape = smape;
+        if (criteria.forecast_backtest_smape_max !== undefined) {
+          const ok = smape <= criteria.forecast_backtest_smape_max;
+          pass.backtest_smape_max = ok;
+          passed = passed && ok;
+        }
+      }
+      if (criteria.forecast_backtest_require_better_than_naive && smape !== undefined && naiveSmape !== undefined) {
+        const ok = smape < naiveSmape;
+        details.backtest_naive_smape = naiveSmape;
+        pass.backtest_beats_naive = ok;
+        passed = passed && ok;
+      }
+      if (criteria.forecast_backtest_improvement_min !== undefined && smape !== undefined && naiveSmape !== undefined) {
+        const improvement = naiveSmape - smape;
+        details.backtest_improvement = improvement;
+        const ok = improvement >= criteria.forecast_backtest_improvement_min;
+        pass.backtest_improvement = ok;
+        passed = passed && ok;
+      }
+    }
+  }
     
     if (power.length > 1 && nGrid.length > 1) {
       const isMonotonic = strictlyIncreasing(power);
@@ -414,6 +484,31 @@ function evaluateSuccessCriteria(
   if (criteria.power_monotonicity) {
     const powerMonotonic = details.power_monotonicity as boolean;
     decisionParts.push(`Power Monotonicity: ${pass.power_monotonicity ? 'PASS' : 'FAIL'} (${powerMonotonic ? 'strictly increasing' : 'not monotonic'})`);
+  }
+  if (criteria.forecast_require_lengths_match_horizon) {
+    const ok = pass.forecast_lengths ?? false;
+    const horizon = (toolResult as any)?.horizon as number | undefined;
+    const fl = (toolResult as any)?.forecast?.length;
+    const cl = (toolResult as any)?.ci_low?.length;
+    const ch = (toolResult as any)?.ci_high?.length;
+    decisionParts.push(`Forecast lengths==horizon: ${ok ? 'PASS' : 'FAIL'} (fc:${fl}, lo:${cl}, hi:${ch}, h:${horizon})`);
+  }
+  if (criteria.forecast_require_forecast_within_ci) {
+    const ok = pass.forecast_within_ci ?? false;
+    decisionParts.push(`Forecast within CI: ${ok ? 'PASS' : 'FAIL'}`);
+  }
+  if (criteria.forecast_backtest_smape_max !== undefined) {
+    const sm = details.backtest_smape as number | undefined;
+    decisionParts.push(`Backtest sMAPE: ${(pass.backtest_smape_max ?? false) ? 'PASS' : 'FAIL'} (${sm?.toFixed(3)} ≤ ${criteria.forecast_backtest_smape_max})`);
+  }
+  if (criteria.forecast_backtest_require_better_than_naive) {
+    const sm = details.backtest_smape as number | undefined;
+    const sn = details.backtest_naive_smape as number | undefined;
+    decisionParts.push(`Backtest beats naive: ${(pass.backtest_beats_naive ?? false) ? 'PASS' : 'FAIL'} (${sm?.toFixed(3)} < ${sn?.toFixed(3)})`);
+  }
+  if (criteria.forecast_backtest_improvement_min !== undefined) {
+    const imp = details.backtest_improvement as number | undefined;
+    decisionParts.push(`Backtest improvement: ${(pass.backtest_improvement ?? false) ? 'PASS' : 'FAIL'} (ΔsMAPE=${imp?.toFixed(3)} ≥ ${criteria.forecast_backtest_improvement_min})`);
   }
 
   const decision = `OVERALL: ${passed ? 'PASS' : 'FAIL'} | ${decisionParts.join(' | ')}`;
@@ -770,8 +865,8 @@ Output ONLY the AnalysisPlan JSON.`,
       results[step.tool] = result; // Keep original for backward compatibility
       console.log(`Tool result:`, result);
       
-      // Evaluate success criteria after markov_mcs or power_curve completes
-      if ((step.tool === 'markov_mcs' || step.tool === 'power_curve') && analysisPlan.success_criteria) {
+      // Evaluate success criteria after relevant tools complete
+      if ((step.tool === 'markov_mcs' || step.tool === 'power_curve' || step.tool === 'forecast_arima' || step.tool === 'choice_logit') && analysisPlan.success_criteria) {
         // For power curve tools, we need to check both MDE and power monotonicity
         if (step.tool === 'power_curve') {
           // Check if this is the MDE tool (first power curve)
@@ -796,8 +891,62 @@ Output ONLY the AnalysisPlan JSON.`,
               decision: `MDE: ${mdePass ? 'PASS' : 'FAIL'} | Power: ${powerPass ? 'PASS' : 'FAIL'}`
             };
           }
+        } else if (step.tool === 'choice_logit') {
+          // Evaluate choice model-specific success gates if provided
+          const crit = analysisPlan.success_criteria;
+          const r = result as any;
+          const details: Record<string, unknown> = {};
+          let ok = true;
+          if (crit.choice_require_converged) {
+            details.converged = r?.converged === true;
+            ok = ok && (r?.converged === true);
+          }
+          // Separation gate with OR logic:
+          // pass if separation_warning==false OR (max_group_prob <= threshold && pseudo_r2 <= threshold)
+          const wantNoSep = !!crit.choice_require_no_separation;
+          const wantMgp = typeof crit.choice_max_group_prob_max === 'number';
+          const wantPr2 = typeof crit.choice_pseudo_r2_max === 'number';
+          const noSep = r?.separation_warning === false;
+          const mgp = Number(r?.max_group_prob ?? 1);
+          const pr2 = Number(r?.pseudo_r2 ?? 1);
+          if (wantNoSep || (wantMgp && wantPr2)) {
+            details.no_separation = noSep;
+            if (wantMgp) details.max_group_prob = mgp;
+            if (wantPr2) details.pseudo_r2 = pr2;
+            const mgpOk = wantMgp ? (mgp <= (crit.choice_max_group_prob_max as number)) : false;
+            const pr2Ok = wantPr2 ? (pr2 <= (crit.choice_pseudo_r2_max as number)) : false;
+            const compositeOk = (wantNoSep && noSep) || ((wantMgp && wantPr2) && mgpOk && pr2Ok);
+            details.separation_gate = compositeOk;
+            ok = ok && compositeOk;
+          }
+          if (crit.choice_coef_sign && typeof r?.coef_signs === 'object') {
+            for (const [name, want] of Object.entries(crit.choice_coef_sign)) {
+              if (!want) continue;
+              const sign = (r.coef_signs as Record<string, number>)[name];
+              const pass = (want === 'positive' && sign > 0) || (want === 'negative' && sign < 0) || (want === 'nonzero' && sign !== 0);
+              details[`coef_sign_${name}`] = pass;
+              ok = ok && pass;
+            }
+          }
+          if (Array.isArray(crit.choice_scenario_expectations) && Array.isArray(r?.scenarios)) {
+            for (const exp of crit.choice_scenario_expectations) {
+              const s = (r.scenarios as any[]).find(x => x?.name === exp.scenario_name);
+              if (!s) { ok = false; details[`scenario_${exp.scenario_name}`] = 'missing'; continue; }
+              const alts: string[] = r?.alts || [];
+              const idx = alts.indexOf(exp.alt);
+              if (idx < 0) { ok = false; details[`scenario_${exp.scenario_name}_${exp.alt}`] = 'alt_missing'; continue; }
+              const delta = Number(s.deltas?.[idx] ?? 0);
+              let pass = true;
+              if (exp.direction === 'increase') pass = pass && delta > 0;
+              if (exp.direction === 'decrease') pass = pass && delta < 0;
+              if (typeof exp.min_delta === 'number') pass = pass && Math.abs(delta) >= exp.min_delta;
+              details[`scenario_${exp.scenario_name}_${exp.alt}`] = pass;
+              ok = ok && pass;
+            }
+          }
+          successEvaluation = { passed: ok, details, decision: `CHOICE MODEL: ${ok ? 'PASS' : 'FAIL'}` };
         } else {
-          // For markov_mcs, use the original logic
+          // For markov_mcs or forecast_arima, use the generic logic
           successEvaluation = evaluateSuccessCriteria(analysisPlan.success_criteria, result as Record<string, unknown>);
           console.log(`Success criteria evaluation:`, successEvaluation);
         }

@@ -278,6 +278,30 @@ export const Step = z.discriminatedUnion("tool", [
     tool: z.literal("forecast_arima"),
     args: arimaParams,
   }),
+  z.object({
+    id: z.string().optional(),
+    tool: z.literal("choice_logit"),
+    args: z.object({
+      csv: z.string(),
+      choice_col: z.string().optional(),
+      alt_col: z.string().optional(),
+      chosen_col: z.string().optional(),
+      feature_cols: z.array(z.string()).min(1),
+      standardize: z.boolean().optional(),
+      add_alt_dummies: z.boolean().optional(),
+      base_alt: z.string().optional(),
+      l2_lambda: z.number().optional(),
+      scenarios: z.array(z.object({
+        name: z.string(),
+        scope_alts: z.array(z.string()).optional(),
+        adjustments: z.record(z.string(), z.union([
+          z.number(),
+          z.string(),
+          z.object({ mode: z.enum(["add","mul"]).default("add"), value: z.number() })
+        ]))
+      })).optional()
+    })
+  }),
 ]);
 
 export const SuccessCriteria = z.object({
@@ -293,6 +317,25 @@ export const SuccessCriteria = z.object({
   // Power curve monotonicity checks
   mde_monotonicity: z.string().optional(), // Description of MDE monotonicity check
   power_monotonicity: z.string().optional(), // Description of power monotonicity check
+  // Forecast-specific checks (TS)
+  forecast_require_lengths_match_horizon: z.boolean().optional(),
+  forecast_require_forecast_within_ci: z.boolean().optional(),
+  // If provided, expect worker to return backtest block when backtest_k is set in tool args
+  forecast_backtest_require_better_than_naive: z.boolean().optional(),
+  forecast_backtest_smape_max: z.number().optional(),
+  forecast_backtest_improvement_min: z.number().optional(),
+  // Choice model-specific checks
+  choice_require_converged: z.boolean().optional(),
+  choice_require_no_separation: z.boolean().optional(),
+  choice_max_group_prob_max: z.number().optional(),
+  choice_pseudo_r2_max: z.number().optional(),
+  choice_coef_sign: z.record(z.string(), z.enum(["positive", "negative", "nonzero"]).optional()).optional(),
+  choice_scenario_expectations: z.array(z.object({
+    scenario_name: z.string(),
+    alt: z.string(),
+    direction: z.enum(["increase", "decrease"]).optional(),
+    min_delta: z.number().optional()
+  })).optional()
 });
 
 export const AnalysisPlan = z.object({
