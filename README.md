@@ -10,13 +10,17 @@ Tools/
 │   ├── web/          # Next.js frontend
 │   │   ├── src/
 │   │   │   ├── app/
-│   │   │   │   ├── api/solve/route.ts  # API endpoint for tool orchestration
-│   │   │   │   └── page.tsx            # React frontend
+│   │   │   │   ├── api/solve/route.ts      # API endpoint for tool orchestration
+│   │   │   │   └── page.tsx                # React frontend
 │   │   │   ├── lib/
-│   │   │   │   ├── tools.ts            # Tool definitions
-│   │   │   │   ├── tools_ab_power.ts   # A/B testing tool schemas
-│   │   │   │   └── plan.ts             # Analysis plan schemas & reference resolution
-│   │   │   └── components/
+│   │   │   │   ├── plan.ts                 # Analysis plan schemas & reference resolution
+│   │   │   │   ├── tools.ts                # Tool definitions
+│   │   │   │   ├── tools_ab_power.ts       # A/B testing tool schemas
+│   │   │   │   ├── tools_causal.ts         # Causal inference tool schemas
+│   │   │   │   ├── tools_choice.ts         # Discrete choice model schemas
+│   │   │   │   ├── tools_forecast.ts       # Forecasting tool schemas
+│   │   │   │   └── tools_stats.ts          # General statistics tool schemas
+│   │   │   └── components/                 # React UI components
 │   │   └── package.json
 │   └── worker/       # FastAPI backend
 │       ├── main.py   # Tool implementations (Uvicorn-based)
@@ -160,6 +164,43 @@ pnpm dev
 ```
 
 **Output**: HTML file with an interactive chart.
+
+### Additional Tools
+
+#### A/B Test T-Test (`ab_test_ttest`)
+- Binary mode: `successes_a`, `trials_a`, `successes_b`, `trials_b`, `alpha?=0.05`, `two_tailed?=true`
+- Continuous mode: `mean_a`, `sd_a`, `n_a`, `mean_b`, `sd_b`, `n_b`, `equal_var?`, `alpha?`, `two_tailed?`
+
+Example (binary):
+```json
+{
+  "successes_a": 120, "trials_a": 200,
+  "successes_b": 145, "trials_b": 200,
+  "alpha": 0.05, "two_tailed": true
+}
+```
+
+#### Plot (Bars with CI) (`plot_bar_with_ci`)
+- Inputs: `labels`, `values`, `ci_low`, `ci_high` or their reference variants via the plan materializer
+
+#### Causal Impact / DiD (`causal_impact`)
+- Inputs: `csv`, `treated_entity`, `pre_period: [start,end]`, `post_period: [start,end]`
+- Optional columns: `date_col`, `metric_col`, `entity_col` (defaults in `tools_causal.ts`)
+
+#### Forecasting (`forecast_arima`)
+- Inputs: `ts:number[]`, `horizon`, optional `seasonal_period`, `alpha`, `backtest_k`, plus `start_date` and `freq` for nicer date ticks
+- Outputs: forecast + CI; optional backtest metrics and artifact
+
+#### Discrete Choice Logit (`choice_logit`)
+- Inputs: `csv`, `feature_cols`, optional `standardize`, `add_alt_dummies`, `base_alt`, `l2_lambda`
+- Scenarios: `[{ name, scope_alts?, adjustments: { feature: number | {mode:"add"|"mul", value:number} } }]`
+- Outputs: coefficients with SE/p-values, diagnostics, baseline shares, scenario deltas, artifact
+
+#### Summarize (`summarize_results`)
+- Accepts partial results (e.g., from markov/power/plots) and returns a prose summary block used in the UI
+
+Environment
+- The web app calls the worker at `WORKER_URL` (defaults to `http://localhost:8000`). Create `apps/web/.env.local` to override.
 
 ## 📊 Usage Examples
 
