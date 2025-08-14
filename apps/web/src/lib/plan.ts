@@ -3,6 +3,7 @@ import { abTestParams as abParamsA, barWithCIParams as barParamsA, powerCurvePar
 import { abTestParams as abParamsB, barCIParams as barParamsB } from "./tools_stats";
 import { didParams } from "./tools_causal";
 import { arimaParams } from "./tools_forecast";
+import { backtestParams } from "./tools_backtest";
 
 // Helper function to get value by path
 function getByPath(obj: any, path: string) {
@@ -277,6 +278,11 @@ export const Step = z.discriminatedUnion("tool", [
     id: z.string().optional(),
     tool: z.literal("forecast_arima"),
     args: arimaParams,
+  }),
+  z.object({
+    id: z.string().optional(),
+    tool: z.literal("forecast_backtest"),
+    args: backtestParams,
   }),
   z.object({
     id: z.string().optional(),

@@ -11,6 +11,7 @@ from tools.plot_bar_with_ci import router as plot_bar_ci_router
 from tools.power_curve import router as power_curve_router
 from tools.causal_impact import router as did_router
 from tools.forecast_arima import router as arima_router
+from tools.forecast_backtest import router as backtest_router
 from tools.summarize_results import router as summarize_router
 from tools.ingest import router as ingest_router
 
@@ -36,6 +37,7 @@ app.include_router(plot_bar_ci_router)
 app.include_router(power_curve_router)
 app.include_router(did_router)
 app.include_router(arima_router)
+app.include_router(backtest_router)
 app.include_router(summarize_router)
 app.include_router(ingest_router)
 

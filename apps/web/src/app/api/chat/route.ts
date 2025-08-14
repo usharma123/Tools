@@ -6,7 +6,7 @@ try { ({ Redis } = require("@upstash/redis")); } catch {}
 let LRUCache: any = null;
 try { ({ LRUCache } = require("lru-cache")); } catch {}
 import { tools } from "@/lib/tools/index";
-import { buildPlan } from "@/lib/planner";
+import { buildPlanVerbose } from "@/lib/planner";
 import { materializeArgs } from "@/lib/resolve";
 import { cacheKey } from "@/lib/hash";
 
@@ -56,8 +56,11 @@ export async function POST(req: NextRequest) {
       const write = (type: string, data: any) => controller.enqueue(new TextEncoder().encode(send(type, data)));
       try {
         // 1) Build plan
-        const plan = await buildPlan(payload);
+        const { plan, logs } = await buildPlanVerbose(payload);
         write("plan", plan);
+        if (Array.isArray(logs)) {
+          for (const l of logs) write("log", l);
+        }
 
         // Ask for missing info
         if (plan.ask?.length) { write("ask", plan.ask); controller.close(); return; }
@@ -83,20 +86,19 @@ export async function POST(req: NextRequest) {
           const key = cacheKey({ tool: step.tool, ver: spec.version, args: concreteArgs });
           let out = lru.get(key) || await redis.get(key);
 
+          let wasCached = Boolean(out);
           if (!out) {
             out = await spec.execute(concreteArgs);                    // call worker
             const sz = Buffer.byteLength(JSON.stringify(out), "utf8");
             if (sz < 200_000) { lru.set(key, out); await redis.set(key, out, { ex: 60 * 60 * 24 }); }
           }
 
-          // Stream a compact event (omit full payload to keep the stream light)
-          const sizeBytes = Buffer.byteLength(JSON.stringify(out), "utf8");
+          // Emit a single completion event per tool, include full result
           write("tool:done", {
             id: step.id,
             tool: step.tool,
-            cached: Boolean(out && !lru.has(key)),
-            size: sizeBytes,
-            artifact: typeof out?.artifact_url === 'string' ? out.artifact_url : undefined,
+            cached: wasCached,
+            result: out,
           });
           allToolResults.push({ tool: step.tool, result: out });
           (results as any)[step.id || step.tool] = out;
@@ -110,10 +112,12 @@ export async function POST(req: NextRequest) {
           const ab = allToolResults.find(r => r.tool === 'ab_test_ttest')?.result;
           const pc = allToolResults.find(r => r.tool === 'power_curve')?.result;
           const fc = allToolResults.find(r => r.tool === 'forecast_arima')?.result;
+          const bt = allToolResults.find(r => r.tool === 'forecast_backtest')?.result;
           if (mk) summaryPayload.markov = mk;
           if (ab) summaryPayload.ab_test = ab;
           if (pc) summaryPayload.power_curve = pc;
           if (fc) summaryPayload.forecast = fc;
+          if (bt) summaryPayload.backtest = bt;
           if (Object.keys(summaryPayload).length > 0) {
             const spec = (tools as any)['summarize_results'];
             if (spec) summary = await spec.execute(summaryPayload);

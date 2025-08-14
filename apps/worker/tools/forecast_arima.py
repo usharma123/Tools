@@ -5,7 +5,7 @@ import time
 import numpy as np
 import matplotlib.dates as mdates
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from .utils import fig_to_data_url
+from .utils import fig_to_data_url, fit_sarimax_safe
 
 router = APIRouter()
 
@@ -33,11 +33,37 @@ def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
             index_is_datetime = True
     except Exception:
         index_is_datetime = False
+    # --- Seasonality guard + tiny auto-inference ---
     order = (1, 1, 1)
     seasonal_order = (0, 0, 0, 0)
-    if args.seasonal_period:
-        seasonal_order = (1, 1, 1, args.seasonal_period)
-    res = SARIMAX(y, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
+
+    sp = args.seasonal_period
+
+    # If seasonal_period not provided, try a tiny ACF-based heuristic
+    if sp is None:
+        try:
+            candidates = [7, 12, 24, 52]
+            best_lag = None
+            best_score = 0.0
+            yv = y.values
+            yv = yv - float(np.mean(yv))
+            denom = float(np.sqrt(np.sum(yv ** 2))) + 1e-12
+            for lag in candidates:
+                if len(yv) < 2 * lag:
+                    continue
+                # simple normalized auto-correlation at given lag
+                num = float(np.dot(yv[lag:], yv[:-lag]))
+                ac = num / (denom * denom)
+                if abs(ac) > abs(best_score):
+                    best_score = ac
+                    best_lag = lag
+            # require a modest threshold
+            if best_lag is not None and abs(best_score) >= 0.2:
+                sp = int(best_lag)
+        except Exception:
+            sp = None
+
+    res, used_order, used_seasonal = fit_sarimax_safe(y, order=(1,1,1), sp=sp, alpha=args.alpha)
     pred = res.get_forecast(steps=args.horizon)
     y_hat = pred.predicted_mean.tolist()
     ci_df = pred.conf_int(alpha=args.alpha)
@@ -69,26 +95,42 @@ def forecast_arima(args: ARIMAArgs) -> Dict[str, Any]:
         f_idx = np.arange(len(y), len(y) + args.horizon)
         ax.plot(f_idx, y_hat, label="Forecast")
         ax.fill_between(f_idx, ci_low, ci_high, color="orange", alpha=0.2, label=f"{int((1-args.alpha)*100)}% CI")
-    ax.set_title("ARIMA forecast"); ax.set_xlabel("Index"); ax.set_ylabel("Value"); ax.legend(loc="best")
+    ax.set_title("ARIMA forecast"); ax.set_xlabel("Time" if index_is_datetime else "t"); ax.set_ylabel("Value"); ax.legend(loc="best")
     img = fig_to_data_url(fig)
+    # CI sanity check warning
+    try:
+        band = float(np.max(ci_high) - np.min(ci_low))
+        span = float(np.max(y) - np.min(y) + 1e-9)
+        ci_warn = bool(band > 10.0 * span)
+    except Exception:
+        ci_warn = False
+
+    warn = False
+    try:
+        if hasattr(res, "mle_retvals"):
+            warn = not res.mle_retvals.get("converged", True)
+    except Exception:
+        warn = False
+
     out: Dict[str, Any] = {
-        "tool_version": "forecast_arima/0.1.0",
-        "model_order": order,
-        "seasonal_order": seasonal_order,
-        "aic": float(res.aic),
+        "tool_version": "forecast_arima/0.1.2",
+        "model_order": list(used_order),
+        "seasonal_order": list(used_seasonal),
+        "aic": float(getattr(res, "aic", float("nan"))),
         "forecast": y_hat,
         "ci_low": ci_low,
         "ci_high": ci_high,
         "horizon": int(args.horizon),
         "artifact_url": img,
         "runtime_ms": (time.perf_counter() - t0) * 1000,
+        "warnings": {"ci_unreasonably_wide": ci_warn, "converged": (not warn), "note": ("Fallback used or seasonality dropped" if (warn or tuple(used_seasonal)==(0,0,0,0)) else None)},
     }
     try:
         if args.backtest_k is not None and args.backtest_k > 0 and args.backtest_k < len(y):
             k = int(args.backtest_k)
             y_train = y.iloc[:-k]
             y_test = y.iloc[-k:]
-            bt_res = SARIMAX(y_train, order=order, seasonal_order=seasonal_order, enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
+            bt_res, _, _ = fit_sarimax_safe(y_train, order=order, sp=sp, alpha=args.alpha)
             bt_pred = bt_res.get_forecast(steps=k)
             y_hat_k = bt_pred.predicted_mean.values
             naive_last = float(y_train.iloc[-1])

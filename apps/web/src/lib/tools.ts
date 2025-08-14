@@ -109,6 +109,8 @@ export const summarizeParams = z.object({
   markov: z.any().optional(),
   ab_test: z.any().optional(),
   power_curve: z.any().optional(),
+  forecast: z.any().optional(),
+  backtest: z.any().optional(),
   notes: z.string().optional(),
 });
 

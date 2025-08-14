@@ -1,4 +1,4 @@
-import { stableStringify } from "./hash";
+// No imports
 
 function getByPath(obj: any, dotted: string) {
   return dotted.split(".").reduce((o, k) => (o == null ? o : (o as any)[k]), obj);
@@ -14,7 +14,7 @@ function applyOp(value: any, op?: string, extra?: any, results?: any) {
       const k = extra?.k ?? 10;
       if (!Array.isArray(value)) return value;
       const slice = value.slice(-k);
-      return slice.reduce((a: number, b: number) => a + b, 0) / (slice.length || 1);
+      return slice.reduce((a: number, b: number) => a + Number(b || 0), 0) / (slice.length || 1);
     }
     case "divide": {
       const denomRef = extra?.by;
@@ -28,27 +28,31 @@ function applyOp(value: any, op?: string, extra?: any, results?: any) {
   }
 }
 
-export function resolveValue(v: any, results: Record<string, any>) {
+export function resolveValue(v: any, results: Record<string, any>): any {
   // Object ref with op: { ref:"$step.field", op:"..." }
   if (v && typeof v === "object" && "ref" in v) {
-    const raw = getByPath(results, (v as any).ref.slice(1));
-    return applyOp(raw, (v as any).op as string | undefined, v, results);
+    const ref = (v as any).ref;
+    if (typeof ref === "string" && ref.startsWith("$")) {
+      const raw = getByPath(results, ref.slice(1));
+      return applyOp(raw, (v as any).op as string | undefined, v, results);
+    }
+    // If ref is malformed, fall through to recursively resolve fields instead of throwing
   }
   // Dollar string ref: "$step.field"
   if (isDollarRef(v)) return getByPath(results, v.slice(1));
   // Plain value or arrays/objects: recurse
   if (Array.isArray(v)) return v.map((x) => resolveValue(x, results));
   if (v && typeof v === "object") {
-    const out: any = {};
-    for (const [k, val] of Object.entries(v)) out[k] = resolveValue(val, results);
+    const out: Record<string, any> = {};
+    for (const [k, val] of Object.entries(v)) out[k] = resolveValue(val as any, results);
     return out;
   }
   return v;
 }
 
 /** Build final numeric args expected by tools (also supports plot helpers). */
-export function materializeArgs(toolName: string, args: any, results: Record<string, any>) {
-  const out: any = resolveValue(args, results);
+export function materializeArgs(toolName: string, args: any, results: Record<string, any>): any {
+  const out: any = resolveValue(args as any, results);
 
   // Single-series helpers for plot_line (if present)
   if (toolName === "plot_line" && out.y_from) {

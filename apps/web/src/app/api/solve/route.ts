@@ -4,6 +4,7 @@ import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
 import { choice_logit, choiceLogitPlanParams } from "@/lib/tools_choice";
 import { forecast_arima as forecast_arima_adapter } from "@/lib/tools_forecast";
+import { forecast_backtest as forecast_backtest_adapter } from "@/lib/tools_backtest";
 import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve, abTestParams as abTestParamsA, barWithCIParams as barWithCIParamsA, powerCurveParams } from "@/lib/tools_ab_power";
 import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B, abTestParams as abTestParamsB, barCIParams as barCIParamsB } from "@/lib/tools_stats";
 import { causal_impact } from "@/lib/tools_causal";
@@ -207,6 +208,8 @@ async function executeTool(toolName: string, params: unknown) {
       return await causal_impact(params);
     } else if (toolName === "forecast_arima") {
       return await forecast_arima_adapter(params);
+    } else if (toolName === "forecast_backtest") {
+      return await forecast_backtest_adapter(params);
     } else if (toolName === "choice_logit") {
       // Accept either numbers or strings in plan; coerce safely
       const p = params as any;
@@ -831,6 +834,20 @@ Output ONLY the AnalysisPlan JSON.`,
     });
   }
 
+  // If success_criteria is missing and the plan includes power_curve, inject sensible defaults
+  if (analysisPlan && !analysisPlan.success_criteria) {
+    const hasMde = analysisPlan.steps.some((s: any) => s.tool === 'power_curve' && (s.args?.mode === 'mde_vs_n'));
+    const hasPower = analysisPlan.steps.some((s: any) => s.tool === 'power_curve' && (s.args?.mode === 'power_vs_n'));
+    if (hasMde || hasPower) {
+      analysisPlan.success_criteria = {
+        description: "Power analysis completed with monotonicity checks",
+        metrics: ["monotonicity"],
+        ...(hasMde ? { mde_monotonicity: "n_per_arm_A strictly decreases as MDE increases" } : {}),
+        ...(hasPower ? { power_monotonicity: "power strictly increases with n" } : {})
+      } as SuccessCriteria;
+    }
+  }
+
   const allToolResults: Array<{tool: string; params: unknown; result: unknown}> = [];
   let successEvaluation: { passed: boolean; details: Record<string, unknown>; decision: string } | null = null;
 
@@ -968,9 +985,13 @@ Output ONLY the AnalysisPlan JSON.`,
     const mk = allToolResults.find(r => r.tool === 'markov_mcs')?.result;
     const ab = allToolResults.find(r => r.tool === 'ab_test_ttest')?.result;
     const pc = allToolResults.find(r => r.tool === 'power_curve')?.result;
+    const fc = allToolResults.find(r => r.tool === 'forecast_arima')?.result;
+    const bt = allToolResults.find(r => r.tool === 'forecast_backtest')?.result;
     if (mk) summaryPayload.markov = mk;
     if (ab) summaryPayload.ab_test = ab;
     if (pc) summaryPayload.power_curve = pc;
+    if (fc) summaryPayload.forecast = fc;
+    if (bt) summaryPayload.backtest = bt;
     if (Object.keys(summaryPayload).length > 0) {
       const summaryResult = await executeTool('summarize_results', summaryPayload);
       allToolResults.push({ tool: 'summarize_results', params: summaryPayload, result: summaryResult });

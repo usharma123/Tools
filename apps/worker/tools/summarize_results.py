@@ -12,6 +12,7 @@ class SummarizeInputs(BaseModel):
     power_curve: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     forecast: Optional[Dict[str, Any]] = None
+    backtest: Optional[Dict[str, Any]] = None
 
 
 @router.post("/tools/summarize_results")
@@ -75,6 +76,26 @@ def summarize_results(args: SummarizeInputs) -> Dict[str, Any]:
         aic = fc.get("aic"); order = fc.get("model_order"); seas = fc.get("seasonal_order")
         if aic is not None and order is not None:
             paragraphs.append(f"Forecast model: ARIMA{tuple(order)}{('x' + str(tuple(seas)) if seas is not None else '')} with AIC={float(aic):.2f}.")
+    if args.backtest:
+        bt = args.backtest
+        overall = bt.get("overall") or {}
+        sm_model = overall.get("smape_model_pct")
+        sm_naive = overall.get("smape_naive_pct")
+        mae_model = overall.get("mae_model")
+        rmse_model = overall.get("rmse_model")
+        coverage = overall.get("coverage")
+        beats_ratio = overall.get("beats_naive_ratio")
+        horizon = bt.get("horizon")
+        folds = len(bt.get("origins") or [])
+        parts = []
+        if sm_model is not None and sm_naive is not None:
+            parts.append(f"sMAPE model {float(sm_model):.2f}% vs naïve {float(sm_naive):.2f}%")
+        if mae_model is not None: parts.append(f"MAE {float(mae_model):.3f}")
+        if rmse_model is not None: parts.append(f"RMSE {float(rmse_model):.3f}")
+        if coverage is not None: parts.append(f"CI coverage {float(coverage):.2f}")
+        if beats_ratio is not None: parts.append(f"beats_naive_ratio {float(beats_ratio):.2f}")
+        if parts:
+            paragraphs.append("Backtest (rolling origin): " + ", ".join(parts) + (f"; horizon={int(horizon)}, folds≈{int(folds)}" if horizon and folds else "."))
     if args.notes:
         paragraphs.append(shorten(args.notes, width=280, placeholder="…"))
     if not paragraphs:
