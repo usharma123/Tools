@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const WORKER = process.env.WORKER_URL || "http://localhost:8000";
 
-const markovMcsParams = z.object({
+export const markovMcsParams = z.object({
   transition: z.array(z.array(z.number())),
   start: z.number().optional(),
   steps: z.number().optional(),
@@ -38,7 +38,7 @@ export async function run_markov_mcs(args: unknown) {
   }
 }
 
-const plotLineParams = z.object({
+export const plotLineParams = z.object({
   // Support both direct series and variable references
   series: z.record(z.string(), z.array(z.number())).optional(),
   series_from: z.string().optional(), // Variable reference like "$markov_mcs.trajectory_data.cumulative_means"
@@ -71,7 +71,7 @@ export async function plot_line(args: unknown) {
   }
 }
 
-const plotBarParams = z.object({
+export const plotBarParams = z.object({
   // Support both direct series and variable references
   series: z.record(z.string(), z.array(z.number())).optional(),
   series_from: z.string().optional(), // Variable reference like "$markov_mcs.stationary_estimate"
@@ -105,7 +105,7 @@ export async function plot_bar(args: unknown) {
 }
 
 // Summarize results tool
-const summarizeParams = z.object({
+export const summarizeParams = z.object({
   markov: z.any().optional(),
   ab_test: z.any().optional(),
   power_curve: z.any().optional(),

@@ -667,7 +667,8 @@ export async function POST(req: NextRequest) {
     } else if (query) {
     // Generate plan using AI
     const { text: generatedText } = await generateText({
-      model: openai("gpt-4o-mini"),
+      model: openai("gpt-5"),
+      temperature: 1,
       system: SYSTEM,
       prompt: `Problem: ${query}
 

@@ -285,6 +285,12 @@ export default function Home() {
             >
               {loading ? "Solving..." : "Run"}
             </button>
+            <a
+              href={`/chat${q ? `?q=${encodeURIComponent(q)}` : ''}`}
+              className="shrink-0 inline-flex items-center justify-center h-9 md:h-10 px-4 rounded-full border border-violet-200 text-violet-700 bg-white hover:bg-violet-50"
+            >
+              Open Chat
+            </a>
           </div>
 
           {/* Quick examples */}
