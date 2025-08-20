@@ -10,12 +10,13 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([
     { role: "assistant" as const, content: "Hi! Tell me what you want to analyze (e.g., power curve, forecast, Markov)." },
   ]);
-  const { run, plan, asks, events, final } = useChatRun();
+  const { run, plan, asks, events, logs, final } = useChatRun();
   const [sending, setSending] = useState(false);
   const postedPlanRef = useRef(false);
   const postedAsksCountRef = useRef(0);
   const postedEventsCountRef = useRef(0);
   const postedFinalRef = useRef(false);
+  const logsEndRef = useRef<HTMLDivElement>(null);
   const search = useSearchParams();
 
   useEffect(() => {
@@ -23,6 +24,13 @@ export default function ChatPage() {
     if (q) setInput(q);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Auto-scroll logs to bottom when new logs arrive
+  useEffect(() => {
+    if (logsEndRef.current) {
+      logsEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   const onSend = async () => {
     // basic telemetry for debugging
@@ -123,13 +131,77 @@ export default function ChatPage() {
             )}
           </div>
 
+          {/* Real-time logs */}
+          {logs && logs.length > 0 && (
+            <div className="rounded-xl border bg-slate-50/80 shadow-sm overflow-hidden">
+              <div className="px-4 py-2 bg-slate-100 border-b">
+                <div className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                  <div className="size-2 rounded-full bg-green-500 animate-pulse"></div>
+                  Processing
+                </div>
+              </div>
+              <div className="p-3 max-h-40 overflow-y-auto space-y-1">
+                {logs.map((log: any, idx: number) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs">
+                    <div className="text-slate-400 font-mono whitespace-nowrap">
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </div>
+                    <div className={`flex-1 font-mono ${
+                      log.error ? 'text-red-600' : 
+                      log.message?.startsWith('✅') ? 'text-green-600' :
+                      log.message?.startsWith('🔧') ? 'text-blue-600' :
+                      log.message?.startsWith('📋') ? 'text-purple-600' :
+                      log.message?.startsWith('🎉') ? 'text-emerald-600' :
+                      'text-slate-600'
+                    }`}>
+                      {log.message}
+                      {log.duration && (
+                        <span className="text-slate-400 ml-2">({log.duration}ms)</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                <div ref={logsEndRef} />
+              </div>
+            </div>
+          )}
+
           {/* Streamed plan */}
           {plan && (
             <details className="group rounded-xl border bg-white/90 p-3 shadow-sm">
               <summary className="cursor-pointer select-none text-sm text-gray-800 font-medium">
-                Planned steps
+                Analysis Plan
               </summary>
-              <pre className="mt-2 text-xs bg-gray-50 p-2 rounded border overflow-auto">{JSON.stringify(plan, null, 2)}</pre>
+              <div className="mt-2 space-y-2">
+                {plan.objective && (
+                  <div>
+                    <div className="text-xs font-medium text-gray-600">Objective</div>
+                    <div className="text-sm text-gray-800">{plan.objective}</div>
+                  </div>
+                )}
+                {plan.steps && plan.steps.length > 0 && (
+                  <div>
+                    <div className="text-xs font-medium text-gray-600 mb-2">Steps ({plan.steps.length})</div>
+                    <div className="space-y-1">
+                      {plan.steps.map((step: any, idx: number) => (
+                        <div key={idx} className="flex items-center gap-2 text-sm">
+                          <div className="size-5 rounded-full bg-slate-100 text-slate-600 text-xs flex items-center justify-center font-medium">
+                            {idx + 1}
+                          </div>
+                          <span className="font-medium">{step.tool}</span>
+                          {step.args?.title && (
+                            <span className="text-gray-500">- {step.args.title}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <details>
+                  <summary className="text-xs text-gray-500 cursor-pointer">View raw JSON</summary>
+                  <pre className="mt-2 text-xs bg-gray-50 p-2 rounded border overflow-auto">{JSON.stringify(plan, null, 2)}</pre>
+                </details>
+              </div>
             </details>
           )}
 
@@ -176,14 +248,78 @@ export default function ChatPage() {
             </details>
           )}
 
+          {/* Success evaluation */}
+          {final?.successEvaluation && (
+            <div className={`rounded-xl border p-3 shadow-sm ${
+              final.successEvaluation.passed 
+                ? 'bg-green-50 border-green-200' 
+                : 'bg-red-50 border-red-200'
+            }`}>
+              <div className="text-sm font-medium mb-2">Success Evaluation</div>
+              <div className={`font-mono text-xs mb-2 ${
+                final.successEvaluation.passed 
+                  ? 'text-green-800' 
+                  : 'text-red-800'
+              }`}>
+                {final.successEvaluation.decision}
+              </div>
+              <details>
+                <summary className="text-xs text-gray-600 cursor-pointer">View details</summary>
+                <pre className="mt-2 text-xs bg-white p-2 rounded border overflow-auto">
+                  {JSON.stringify(final.successEvaluation.details, null, 2)}
+                </pre>
+              </details>
+            </div>
+          )}
+
           {/* Final results */}
           {final && (
             <details open className="group rounded-xl border bg-white/90 p-3 shadow-sm">
-              <summary className="cursor-pointer select-none text-sm text-gray-800 font-medium">Final</summary>
+              <summary className="cursor-pointer select-none text-sm text-gray-800 font-medium">Results Summary</summary>
               {final?.summary?.summary ? (
                 <p className="mt-1 text-sm text-gray-800 leading-relaxed">{final.summary.summary}</p>
               ) : null}
-              <pre className="mt-2 text-xs bg-gray-50 p-2 rounded border overflow-auto">{JSON.stringify(final, null, 2)}</pre>
+              
+              {/* Show results in a cleaner format */}
+              {final.results && final.results.length > 0 && (
+                <div className="mt-3 space-y-3">
+                  {final.results.map((result: any, idx: number) => (
+                    <div key={idx} className="rounded border p-3 bg-gray-50">
+                      <div className="text-sm font-medium mb-1 capitalize">
+                        {result.tool?.replace(/_/g, ' ')}
+                      </div>
+                      
+                      {/* Show artifacts if available - prioritize base64 image over iframe */}
+                      {result.result?.image_base64 ? (
+                        <div className="mt-2">
+                          <img 
+                            src={result.result.image_base64} 
+                            alt={`${result.tool} result`} 
+                            className="w-full h-auto rounded border" 
+                          />
+                        </div>
+                      ) : result.result?.artifact_url ? (
+                        <div className="mt-2">
+                          <iframe 
+                            src={`http://localhost:8000${result.result.artifact_url}`}
+                            width="100%" 
+                            height="300" 
+                            className="rounded border" 
+                            title={`${result.tool} result`}
+                          />
+                        </div>
+                      ) : null}
+                      
+                      <details className="mt-2">
+                        <summary className="text-xs text-gray-600 cursor-pointer">Raw data</summary>
+                        <pre className="mt-1 text-xs bg-white p-2 rounded border overflow-auto">
+                          {JSON.stringify(result.result, null, 2)}
+                        </pre>
+                      </details>
+                    </div>
+                  ))}
+                </div>
+              )}
             </details>
           )}
         </div>

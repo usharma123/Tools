@@ -1,19 +1,9 @@
-import { z } from "zod";
+import { markovMcsParams, plotLineParams, plotBarParams, summarizeParams } from "./schemas";
 
 const WORKER = process.env.WORKER_URL || "http://localhost:8000";
 
-export const markovMcsParams = z.object({
-  transition: z.array(z.array(z.number())),
-  start: z.number().optional(),
-  steps: z.number().optional(),
-  trials: z.number().optional(),
-  burnin: z.number().optional(),
-  seed: z.number(),
-  metric: z.enum(["stationary","avg_reward","trajectory"]).optional(),
-  rewards: z.array(z.number()).optional(),
-  ci: z.number().optional(),
-  track_trajectory: z.boolean().optional(),
-});
+// Export schemas for backward compatibility
+export { markovMcsParams, plotLineParams, plotBarParams, summarizeParams };
 
 export async function run_markov_mcs(args: unknown) {
   const parsed = markovMcsParams.parse(args);
@@ -38,16 +28,6 @@ export async function run_markov_mcs(args: unknown) {
   }
 }
 
-export const plotLineParams = z.object({
-  // Support both direct series and variable references
-  series: z.record(z.string(), z.array(z.number())).optional(),
-  series_from: z.string().optional(), // Variable reference like "$markov_mcs.trajectory_data.cumulative_means"
-  labels: z.string().optional(), // Variable reference for labels
-  title: z.string().optional(),
-  xlabel: z.string().optional(),
-  ylabel: z.string().optional(),
-});
-
 export async function plot_line(args: unknown) {
   const parsed = plotLineParams.parse(args);
   try {
@@ -71,16 +51,6 @@ export async function plot_line(args: unknown) {
   }
 }
 
-export const plotBarParams = z.object({
-  // Support both direct series and variable references
-  series: z.record(z.string(), z.array(z.number())).optional(),
-  series_from: z.string().optional(), // Variable reference like "$markov_mcs.stationary_estimate"
-  title: z.string().optional(),
-  xlabel: z.string().optional(),
-  ylabel: z.string().optional(),
-  ref_lines_y: z.array(z.number()).optional(), // Reference lines at stationary probabilities
-});
-
 export async function plot_bar(args: unknown) {
   const parsed = plotBarParams.parse(args);
   try {
@@ -103,16 +73,6 @@ export async function plot_bar(args: unknown) {
     throw new Error(`Failed to call plot_bar: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
-
-// Summarize results tool
-export const summarizeParams = z.object({
-  markov: z.any().optional(),
-  ab_test: z.any().optional(),
-  power_curve: z.any().optional(),
-  forecast: z.any().optional(),
-  backtest: z.any().optional(),
-  notes: z.string().optional(),
-});
 
 export async function summarize_results(args: unknown) {
   const parsed = summarizeParams.parse(args);

@@ -2,11 +2,11 @@ import { NextRequest } from "next/server";
 import { generateText } from "ai";
 import { openai } from "@ai-sdk/openai";
 import { run_markov_mcs, plot_line, plot_bar, summarize_results } from "@/lib/tools";
-import { choice_logit, choiceLogitPlanParams } from "@/lib/tools_choice";
+import { choice_logit } from "@/lib/tools_choice";
 import { forecast_arima as forecast_arima_adapter } from "@/lib/tools_forecast";
 import { forecast_backtest as forecast_backtest_adapter } from "@/lib/tools_backtest";
-import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve, abTestParams as abTestParamsA, barWithCIParams as barWithCIParamsA, powerCurveParams } from "@/lib/tools_ab_power";
-import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B, abTestParams as abTestParamsB, barCIParams as barCIParamsB } from "@/lib/tools_stats";
+import { ab_test_ttest as ab_test_ttest_A, plot_bar_with_ci as plot_bar_with_ci_A, power_curve } from "@/lib/tools_ab_power";
+import { ab_test_ttest as ab_test_ttest_B, plot_bar_with_ci as plot_bar_with_ci_B } from "@/lib/tools_stats";
 import { causal_impact } from "@/lib/tools_causal";
 import { AnalysisPlan, SuccessCriteria, materializeArgs } from "@/lib/plan";
 

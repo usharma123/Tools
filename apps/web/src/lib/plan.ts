@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { abTestParams as abParamsA, barWithCIParams as barParamsA, powerCurveParams } from "./tools_ab_power";
-import { abTestParams as abParamsB, barCIParams as barParamsB } from "./tools_stats";
+import { abTestParams, barWithCIParams, powerCurveParams, markovMcsParams, plotLineParams, plotBarParams, summarizeParams } from "./schemas";
 import { didParams } from "./tools_causal";
 import { arimaParams } from "./tools_forecast";
 import { backtestParams } from "./tools_backtest";
@@ -169,84 +168,40 @@ export function materializeArgs(toolName: string, args: any, results: Record<str
   return out;
 }
 
-// Define specific argument schemas for each tool
-export const MarkovMcsArgs = z.object({
-  transition: z.array(z.array(z.number())),
-  start: z.number().optional(),
-  steps: z.number().optional(),
-  trials: z.number().optional(),
-  burnin: z.number().optional(),
-  seed: z.number().optional(),
-  metric: z.enum(["stationary", "avg_reward", "trajectory"]).optional(),
-  rewards: z.array(z.number()).optional(),
-  ci: z.number().optional(),
-  track_trajectory: z.boolean().optional(),
-});
-
-export const PlotLineArgs = z.object({
-  // Support both direct series and variable references
-  series: z.record(z.string(), z.array(z.number())).optional(),
-  series_from: z.string().optional(), // Variable reference like "$markov_mcs.trajectory_data.cumulative_means"
-  labels: z.union([z.string(), z.array(z.string())]).optional(), // Variable reference for labels (string or array)
-  // Single series helpers
-  y_from: z.string().optional(), // Variable reference for y values
-  x_from: z.string().optional(), // Variable reference for x values
-  label: z.string().optional(), // Single label for single series
-  title: z.string().optional(),
-  xlabel: z.string().optional(),
-  ylabel: z.string().optional(),
-  ref_lines_y: z.union([z.string(), z.array(z.number())]).optional(), // Reference lines at stationary probabilities (string for variable reference, array for resolved values)
-});
-
-export const PlotBarArgs = z.object({
-  // Support both direct series and variable references
-  series: z.record(z.string(), z.array(z.number())).optional(),
-  series_from: z.string().optional(), // Variable reference like "$markov_mcs.stationary_estimate"
-  labels: z.string().optional(), // Variable reference for labels
-  title: z.string().optional(),
-  xlabel: z.string().optional(),
-  ylabel: z.string().optional(),
-  ref_lines_y: z.union([z.string(), z.array(z.number())]).optional(), // Reference lines at stationary probabilities
-});
-
-// New summarization tool args
-export const SummarizeResultsArgs = z.object({
-  markov: z.any().optional(),
-  ab_test: z.any().optional(),
-  power_curve: z.any().optional(),
-  notes: z.string().optional(),
-});
+// Use centralized schemas with aliases for backward compatibility
+export const MarkovMcsArgs = markovMcsParams;
+export const PlotLineArgs = plotLineParams;
+export const PlotBarArgs = plotBarParams;
+export const SummarizeResultsArgs = summarizeParams;
 
 // Define the Step schema with discriminated unions
 export const Step = z.discriminatedUnion("tool", [
   z.object({
     id: z.string().optional(),
     tool: z.literal("markov_mcs"),
-    args: MarkovMcsArgs,
+    args: markovMcsParams,
   }),
   z.object({
     id: z.string().optional(),
     tool: z.literal("plot_line"),
-    args: PlotLineArgs,
+    args: plotLineParams,
   }),
   z.object({
     id: z.string().optional(),
     tool: z.literal("plot_bar"),
-    args: PlotBarArgs,
+    args: plotBarParams,
   }),
   z.object({
     id: z.string().optional(),
     tool: z.literal("ab_test_ttest"),
-    args: z.union([abParamsA, abParamsB]),
+    args: abTestParams,
   }),
   z.object({
     id: z.string().optional(),
     tool: z.literal("plot_bar_with_ci"),
     args: z.union([
-      // Original strict schema (older module) and new stats module
-      barParamsA,
-      barParamsB,
-      // Reference-based schema
+      barWithCIParams,
+      // Reference-based schema for variable resolution
       z.object({
         labels: z.array(z.string()).min(1),
         values_from: z.array(z.string()).min(1),
@@ -267,7 +222,7 @@ export const Step = z.discriminatedUnion("tool", [
   z.object({
     id: z.string().optional(),
     tool: z.literal("summarize_results"),
-    args: SummarizeResultsArgs,
+    args: summarizeParams,
   }),
   z.object({
     id: z.string().optional(),
