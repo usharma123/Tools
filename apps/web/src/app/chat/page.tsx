@@ -144,7 +144,7 @@ export default function ChatPage() {
                 {logs.map((log: any, idx: number) => (
                   <div key={idx} className="flex items-start gap-2 text-xs">
                     <div className="text-slate-400 font-mono whitespace-nowrap">
-                      {new Date(log.timestamp).toLocaleTimeString()}
+                      {log.timestamp ? new Date(log.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()}
                     </div>
                     <div className={`flex-1 font-mono ${
                       log.error ? 'text-red-600' : 

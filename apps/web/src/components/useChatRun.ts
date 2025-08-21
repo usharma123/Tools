@@ -21,15 +21,15 @@ export function useChatRun() {
         return;
       }
       
-      // Use /api/solve-stream for real-time logging
-      const res = await fetch("/api/solve-stream", {
+      // Use /api/chat for proper tool execution with caching
+      const res = await fetch("/api/chat", {
         method: "POST",
         headers: {
           "content-type": "application/json",
           "accept": "text/event-stream",
         },
         cache: "no-store",
-        body: JSON.stringify({ query }),
+        body: JSON.stringify({ messages }),
       });
       
       if (!res.ok) {
@@ -75,33 +75,61 @@ export function useChatRun() {
             } else if (eventType === "ask") {
               setAsks(payload);
             } else if (eventType === "log") {
-              setLogs(prevLogs => [...prevLogs, payload]);
-            } else if (eventType === "tool-complete") {
-              // Add to events when a tool completes
-              setEvents(prevEvents => [...prevEvents, {
-                id: `tool_${payload.step}`,
-                tool: payload.tool,
-                type: "done",
-                result: payload.result,
-                artifact: payload.result?.image_base64 || payload.result?.artifact_url,
-                size: payload.result ? JSON.stringify(payload.result).length : 0,
-                duration: payload.duration
+              setLogs(prevLogs => [...prevLogs, {
+                ...payload,
+                timestamp: payload.timestamp || new Date().toISOString()
               }]);
+            } else             if (eventType === "tool:start") {
+              // Add to events when a tool starts
+              setEvents(prevEvents => [...prevEvents, {
+                id: payload.id,
+                tool: payload.tool,
+                type: "running"
+              }]);
+            } else if (eventType === "tool:done") {
+              // Update events when a tool completes, or add new event if not found
+              setEvents(prevEvents => {
+                const existingEvent = prevEvents.find(event => event.id === payload.id);
+                if (existingEvent) {
+                  return prevEvents.map(event =>
+                    event.id === payload.id
+                      ? {
+                          ...event,
+                          type: "done",
+                          cached: payload.cached,
+                          result: payload.result,
+                          artifact: payload.result?.image_base64 || payload.result?.artifact_url,
+                          size: payload.result ? JSON.stringify(payload.result).length : 0
+                        }
+                      : event
+                  );
+                } else {
+                  return [...prevEvents, {
+                    id: payload.id,
+                    tool: payload.tool,
+                    type: "done",
+                    cached: payload.cached,
+                    result: payload.result,
+                    artifact: payload.result?.image_base64 || payload.result?.artifact_url,
+                    size: payload.result ? JSON.stringify(payload.result).length : 0
+                  }];
+                }
+              });
             } else if (eventType === "final") {
               const finalResult: any = {
-                results: payload.toolResults || [],
-                summary: payload.toolResults?.find((r: any) => r.tool === 'summarize_results')?.result
+                results: payload.results || [],
+                summary: payload.summary
               };
-              
+
               if (payload.successEvaluation) {
                 finalResult.successEvaluation = payload.successEvaluation;
               }
-              
+
               setFinal(finalResult);
             } else if (eventType === "error") {
               setEvents(prevEvents => [...prevEvents, { type: "error", payload }]);
             }
-          } catch (e) {
+          } catch {
             // ignore JSON parse errors on partial chunks
           }
         }

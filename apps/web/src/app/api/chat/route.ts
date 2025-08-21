@@ -2,9 +2,17 @@ import { NextRequest } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 let Redis: any = null;
-try { ({ Redis } = require("@upstash/redis")); } catch {}
 let LRUCache: any = null;
-try { ({ LRUCache } = require("lru-cache")); } catch {}
+try {
+  const mod = await import("@upstash/redis");
+  // @ts-expect-error dynamic import shape
+  Redis = (mod as any).Redis;
+} catch {}
+try {
+  const mod = await import("lru-cache");
+  // @ts-expect-error dynamic import shape
+  LRUCache = (mod as any).LRUCache;
+} catch {}
 import { tools } from "@/lib/tools/index";
 import { buildPlanVerbose } from "@/lib/planner";
 import { materializeArgs } from "@/lib/resolve";
@@ -59,7 +67,7 @@ export async function POST(req: NextRequest) {
         const { plan, logs } = await buildPlanVerbose(payload);
         write("plan", plan);
         if (Array.isArray(logs)) {
-          for (const l of logs) write("log", l);
+          for (const l of logs) write("log", { ...l, timestamp: new Date().toISOString() });
         }
 
         // Ask for missing info
@@ -86,7 +94,7 @@ export async function POST(req: NextRequest) {
           const key = cacheKey({ tool: step.tool, ver: spec.version, args: concreteArgs });
           let out = lru.get(key) || await redis.get(key);
 
-          let wasCached = Boolean(out);
+          const wasCached = Boolean(out);
           if (!out) {
             out = await spec.execute(concreteArgs);                    // call worker
             const sz = Buffer.byteLength(JSON.stringify(out), "utf8");

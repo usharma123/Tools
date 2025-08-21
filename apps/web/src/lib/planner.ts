@@ -75,7 +75,7 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
   const msgs = input.messages;
   const lastMsg = msgs[msgs.length - 1]?.content || "";
   const last = lastMsg.toLowerCase();
-  const logs: Array<{ message: string; meta?: Record<string, any> }> = [];
+  const logs: Array<{ message: string; meta?: Record<string, any>; timestamp?: string }> = [];
 
   // Detect most recent intent by scanning backwards and picking the first match
   type Intent = 'power'|'backtest'|'forecast'|'markov'|'ab'|'causal'|null;
@@ -94,7 +94,7 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
   };
 
   const { intent, text: intentText } = detectIntent();
-  logs.push({ message: "intent_detected", meta: { intent } });
+  logs.push({ message: "intent_detected", meta: { intent }, timestamp: new Date().toISOString() });
 
   // crude routing with priority on latest intent only
   if (intent === 'power') {
@@ -106,7 +106,7 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
     const nGrid = (extractFirstBracketArrayNumbers(text) || [2000, 4000, 6000]).map(x => Math.max(1, Math.round(x)));
     const step = { id: "curve_power", tool: "power_curve", args: { mode: "power_vs_n", baseline, alpha: 0.05, two_tailed: true, ratio: 1, mde_rel, n_grid: nGrid } } as const;
     const asks = missingFields((tools as any)[step.tool].params, step.args);
-    logs.push({ message: "route_power_curve", meta: { baseline, mde_rel: mde_rel, n_grid: nGrid } });
+    logs.push({ message: "route_power_curve", meta: { baseline, mde_rel: mde_rel, n_grid: nGrid }, timestamp: new Date().toISOString() });
     const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
     return { plan, logs };
   }
@@ -123,10 +123,29 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
       track_trajectory: true,
       seed: 12345,
     };
-    const step = { id: "mk", tool: "markov_mcs", args } as const;
-    const asks = missingFields(tools[step.tool].params, step.args);
-    logs.push({ message: "route_markov", meta: { steps: args.steps, trials: args.trials } });
-    const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
+    const mkStep = { id: "mk", tool: "markov_mcs", args } as const;
+    const plotStep = {
+      id: "mk_term_plot",
+      tool: "plot_bar_with_ci",
+      args: {
+        labels: { ref: "$mk.trajectory_data.states" },
+        values_from: { ref: "$mk.final_cum_share" },
+        ci_low_from: { ref: "$mk.final_ci_low" },
+        ci_high_from: { ref: "$mk.final_ci_high" },
+        title: "Terminal distribution (95% CI)",
+        xlabel: "State",
+        ylabel: "Probability",
+        ylim: [0, 1]
+      }
+    } as const;
+    const asksMk = missingFields(tools[mkStep.tool].params, mkStep.args);
+    logs.push({ message: "route_markov", meta: { steps: args.steps, trials: args.trials }, timestamp: new Date().toISOString() });
+    if (asksMk.length) {
+      const plan = { steps: [mkStep as any], ask: asksMk };
+      return { plan, logs };
+    }
+    const asksPlot = missingFields((tools as any)[plotStep.tool].params, (plotStep as any).args);
+    const plan = asksPlot.length ? { steps: [mkStep as any, plotStep as any], ask: asksPlot } : { steps: [mkStep as any, plotStep as any] };
     return { plan, logs };
   }
   if (intent === 'forecast') {
@@ -143,7 +162,7 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
     const ts = (fromLast.length >= 3 ? fromLast : undefined) ?? "$asset:ts.series";
     const step = { id: "fc", tool: "forecast_arima", args: { ts, horizon: 6, seasonal_period: 12 } } as const;
     const asks = missingFields(tools[step.tool].params, step.args);
-    logs.push({ message: "route_forecast_arima", meta: { ts_len: Array.isArray(fromLast) ? fromLast.length : undefined } });
+    logs.push({ message: "route_forecast_arima", meta: { ts_len: Array.isArray(fromLast) ? fromLast.length : undefined }, timestamp: new Date().toISOString() });
     const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
     return { plan, logs };
   }
@@ -173,26 +192,26 @@ export async function buildPlanVerbose(input: PlannerInput): Promise<{ plan: Cha
     const args: any = { ts, horizon, folds, seasonal_period, alpha, order };
     const step = { id: "bt", tool: "forecast_backtest", args } as const;
     const asks = missingFields(tools[step.tool].params, step.args);
-    logs.push({ message: "route_forecast_backtest", meta: { ts_len: Array.isArray(fromText) ? fromText.length : undefined, horizon, folds, seasonal_period, alpha, order } });
+    logs.push({ message: "route_forecast_backtest", meta: { ts_len: Array.isArray(fromText) ? fromText.length : undefined, horizon, folds, seasonal_period, alpha, order }, timestamp: new Date().toISOString() });
     const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
     return { plan, logs };
   }
   if (intent === 'ab') {
     const step = { id: "ab", tool: "ab_test_ttest", args: {} } as const;
     const asks = missingFields(tools[step.tool].params, step.args);
-    logs.push({ message: "route_ab_test" });
+    logs.push({ message: "route_ab_test", timestamp: new Date().toISOString() });
     const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
     return { plan, logs };
   }
   if (intent === 'causal') {
     const step = { id: "did", tool: "causal_impact", args: { csv: "$asset:table.csv" } } as const;
     const asks = missingFields(tools[step.tool].params, step.args);
-    logs.push({ message: "route_causal_impact" });
+    logs.push({ message: "route_causal_impact", timestamp: new Date().toISOString() });
     const plan = asks.length ? { steps: [step as any], ask: asks } : { steps: [step as any] };
     return { plan, logs };
   }
   // fallback: ask user what they want
-  logs.push({ message: "route_unknown" });
+  logs.push({ message: "route_unknown", timestamp: new Date().toISOString() });
   return { plan: { steps: [], ask: [{ path: "tool", question: "What would you like to do? (forecast, A/B, causal)" }] }, logs };
 }
 
