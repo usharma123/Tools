@@ -7,6 +7,9 @@ Benched is a clean, modern agentic analysis system that combines a FastAPI worke
 ```
 Tools/
 ├── apps/
+│   ├── cli/          # Ink-based CLI for running tools
+│   │   ├── src/               # CLI source
+│   │   └── package.json
 │   ├── web/          # Next.js frontend
 │   │   ├── src/
 │   │   │   ├── app/
@@ -33,12 +36,16 @@ Tools/
 
 ```bash
 # Python worker
-cd apps
+cd apps/worker
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 # Web app
 cd ../web
+pnpm install
+
+# CLI
+cd ../cli
 pnpm install
 ```
 
@@ -52,6 +59,10 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 # Terminal 2: Next.js frontend
 cd apps/web
 pnpm dev
+
+# Terminal 3: CLI (optional)
+cd apps/cli
+pnpm start
 ```
 
 ### 3. Access the Application
